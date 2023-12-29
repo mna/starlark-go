@@ -139,6 +139,7 @@ const ( //nolint:revive
 	ATTR         //                 x ATTR<name>          y           y = x.name
 	SETFIELD     //               x y SETFIELD<name>      -           x.name = y
 	UNPACK       //          iterable UNPACK<n>           vn ... v1
+	CATCH        //                 - CATCH<addr>         -           (catch block until specified address, must be followed by JMP)
 
 	// n>>8 is #positional args and n&0xff is #named args (pairs).
 	CALL        // fn positional named                CALL<n>        result
@@ -150,8 +151,6 @@ const ( //nolint:revive
 	OpcodeMax    = CALL_VAR_KW
 )
 
-// TODO(adonovan): add dynamic checks for missing opcodes in the tables below.
-
 var opcodeNames = [...]string{
 	AMP:          "amp",
 	APPEND:       "append",
@@ -160,6 +159,7 @@ var opcodeNames = [...]string{
 	CALL_KW:      "call_kw ",
 	CALL_VAR:     "call_var",
 	CALL_VAR_KW:  "call_var_kw",
+	CATCH:        "catch",
 	CIRCUMFLEX:   "circumflex",
 	CJMP:         "cjmp",
 	CONSTANT:     "constant",
@@ -235,6 +235,7 @@ var stackEffect = [...]int8{
 	CALL_KW:      variableStackEffect,
 	CALL_VAR:     variableStackEffect,
 	CALL_VAR_KW:  variableStackEffect,
+	CATCH:        0,
 	CIRCUMFLEX:   -1,
 	CJMP:         -1,
 	CONSTANT:     +1,
@@ -297,7 +298,7 @@ var stackEffect = [...]int8{
 }
 
 func (op Opcode) String() string {
-	if op < OpcodeMax {
+	if op <= OpcodeMax {
 		if name := opcodeNames[op]; name != "" {
 			return name
 		}
@@ -890,7 +891,7 @@ func PrintOp(fn *Funcode, pc uint32, op Opcode, arg uint32) {
 	case CALL, CALL_VAR, CALL_KW, CALL_VAR_KW:
 		comment = fmt.Sprintf("%d pos, %d named", arg>>8, arg&0xff)
 	default:
-		// JMP, CJMP, ITERJMP, MAKETUPLE, MAKELIST, LOAD, UNPACK:
+		// JMP, CJMP, ITERJMP, MAKETUPLE, MAKELIST, LOAD, UNPACK, CATCH:
 		// arg is just a number
 	}
 	var buf bytes.Buffer

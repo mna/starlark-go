@@ -651,6 +651,27 @@ loop:
 			stack[sp] = Universe[f.Prog.Names[arg]]
 			sp++
 
+		case compile.CATCH:
+			// TODO(mna): push a catch block on the catch stack from this pc (fr.pc
+			// as pc is already on the next one) until <arg> pc (inclusive - account
+			// for the fact that <arg> address might be a pc with args - this should
+			// be at the place where we check to pop the catch blocks).
+			//
+			// Then, the next opcode must be a JMP that jumps to the start of the
+			// block that is protected by this CATCH and on an exception, the VM will
+			// jump back to the addr that follows the JMP after the CATCH.
+			//
+			// So to properly encode a CATCH, it should be like so:
+			// 	001 CATCH <020>
+			// 	002 JMP <010>
+			// 	003 (ops for the CATCH block)
+			// 	...
+			// 	009 RETURN (or JMP or THROW etc. i.e. prevent falling into protected block that threw an exception again)
+			// 	010 start of protected block
+			// 	...
+			// 	020 end of protected block
+			// 	021 unprotected code
+
 		default:
 			err = fmt.Errorf("unimplemented: %s", op)
 			break loop
