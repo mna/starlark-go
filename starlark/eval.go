@@ -190,6 +190,9 @@ type frame struct {
 	pc        uint32   // program counter (Starlark frames only)
 	locals    []Value  // local variables (Starlark frames only)
 	spanStart int64    // start time of current profiler span
+	// TODO(mna): probably useful to have the current catch block stored on the
+	// frame, could be used to check if the next pc is catch.PC0 and the
+	// instruction somehow would fall through (to panic).
 }
 
 // Position returns the source position of the current point of execution in this frame.
