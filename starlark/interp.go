@@ -55,8 +55,7 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	stack := space[nlocals:]          // operand stack
 
 	// Digest arguments and set parameters.
-	err := setArgs(locals, fn, args, kwargs)
-	if err != nil {
+	if err := setArgs(locals, fn, args, kwargs); err != nil {
 		return nil, thread.evalError(err)
 	}
 
@@ -74,9 +73,9 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 		locals[index] = &cell{locals[index]}
 	}
 
-	// TODO(adonovan): add static check that beneath this point
+	// TODO: add static check that beneath this point
 	// - there is exactly one return statement
-	// - there is no redefinition of 'err'.
+	// - there is no redefinition of 'inFlightErr'.
 
 	var iterstack []Iterator // stack of active iterators
 
@@ -94,6 +93,7 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	sp := 0
 	var pc uint32
 	var result Value
+	var inFlightErr error
 	code := f.Code
 loop:
 	for {
@@ -106,7 +106,7 @@ loop:
 			}
 		}
 		if reason := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&thread.cancelReason))); reason != nil {
-			err = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
+			inFlightErr = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
 			break loop
 		}
 
@@ -158,7 +158,7 @@ loop:
 			sp -= 2
 			ok, err2 := Compare(op, x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = Bool(ok)
@@ -185,7 +185,7 @@ loop:
 			sp -= 2
 			z, err2 := Binary(binop, x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = z
@@ -201,7 +201,7 @@ loop:
 			x := stack[sp-1]
 			y, err2 := Unary(unop, x)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp-1] = y
@@ -217,7 +217,7 @@ loop:
 			var z Value
 			if xlist, ok := x.(*List); ok {
 				if yiter, ok := y.(Iterable); ok {
-					if err = xlist.checkMutable("apply += to"); err != nil {
+					if inFlightErr = xlist.checkMutable("apply += to"); inFlightErr != nil {
 						break loop
 					}
 					listExtend(xlist, yiter)
@@ -225,8 +225,8 @@ loop:
 				}
 			}
 			if z == nil {
-				z, err = Binary(syntax.PLUS, x, y)
-				if err != nil {
+				z, inFlightErr = Binary(syntax.PLUS, x, y)
+				if inFlightErr != nil {
 					break loop
 				}
 			}
@@ -245,7 +245,7 @@ loop:
 			var z Value
 			if xdict, ok := x.(*Dict); ok {
 				if ydict, ok := y.(*Dict); ok {
-					if err = xdict.ht.checkMutable("apply |= to"); err != nil {
+					if inFlightErr = xdict.ht.checkMutable("apply |= to"); inFlightErr != nil {
 						break loop
 					}
 					xdict.ht.addAll(&ydict.ht) // can't fail
@@ -253,8 +253,8 @@ loop:
 				}
 			}
 			if z == nil {
-				z, err = Binary(syntax.PIPE, x, y)
-				if err != nil {
+				z, inFlightErr = Binary(syntax.PIPE, x, y)
+				if inFlightErr != nil {
 					break loop
 				}
 			}
@@ -312,13 +312,13 @@ loop:
 				// Add key/value items from **kwargs dictionary.
 				dict, ok := kwargs.(IterableMapping)
 				if !ok {
-					err = fmt.Errorf("argument after ** must be a mapping, not %s", kwargs.Type())
+					inFlightErr = fmt.Errorf("argument after ** must be a mapping, not %s", kwargs.Type())
 					break loop
 				}
 				items := dict.Items()
 				for _, item := range items {
 					if _, ok := item[0].(String); !ok {
-						err = fmt.Errorf("keywords must be strings, not %s", item[0].Type())
+						inFlightErr = fmt.Errorf("keywords must be strings, not %s", item[0].Type())
 						break loop
 					}
 				}
@@ -346,7 +346,7 @@ loop:
 				// Add elements from *args sequence.
 				iter := Iterate(args)
 				if iter == nil {
-					err = fmt.Errorf("argument after * must be iterable, not %s", args.Type())
+					inFlightErr = fmt.Errorf("argument after * must be iterable, not %s", args.Type())
 					break loop
 				}
 				var elem Value
@@ -367,7 +367,7 @@ loop:
 			z, err2 := Call(thread, function, positional, kvpairs)
 			thread.beginProfSpan()
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			if vmdebug {
@@ -380,7 +380,7 @@ loop:
 			sp--
 			iter := Iterate(x)
 			if iter == nil {
-				err = fmt.Errorf("%s value is not iterable", x.Type())
+				inFlightErr = fmt.Errorf("%s value is not iterable", x.Type())
 				break loop
 			}
 			iterstack = append(iterstack, iter)
@@ -410,8 +410,8 @@ loop:
 			y := stack[sp-2]
 			x := stack[sp-3]
 			sp -= 3
-			err = setIndex(x, y, z)
-			if err != nil {
+			inFlightErr = setIndex(x, y, z)
+			if inFlightErr != nil {
 				break loop
 			}
 
@@ -421,7 +421,7 @@ loop:
 			sp -= 2
 			z, err2 := getIndex(x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = z
@@ -432,7 +432,7 @@ loop:
 			name := f.Prog.Names[arg]
 			y, err2 := getAttr(x, name)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp-1] = y
@@ -443,7 +443,7 @@ loop:
 			sp -= 2
 			name := f.Prog.Names[arg]
 			if err2 := setField(x, name, y); err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 
@@ -458,11 +458,11 @@ loop:
 			sp -= 3
 			oldlen := dict.Len()
 			if err2 := dict.SetKey(k, v); err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			if op == compile.SETDICTUNIQ && dict.Len() == oldlen {
-				err = fmt.Errorf("duplicate key: %v", k)
+				inFlightErr = fmt.Errorf("duplicate key: %v", k)
 				break loop
 			}
 
@@ -480,7 +480,7 @@ loop:
 			sp -= 4
 			res, err2 := slice(x, lo, hi, step)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = res
@@ -492,7 +492,7 @@ loop:
 			sp--
 			iter := Iterate(iterable)
 			if iter == nil {
-				err = fmt.Errorf("got %s in sequence assignment", iterable.Type())
+				inFlightErr = fmt.Errorf("got %s in sequence assignment", iterable.Type())
 				break loop
 			}
 			i := 0
@@ -503,12 +503,12 @@ loop:
 			var dummy Value
 			if iter.Next(&dummy) {
 				// NB: Len may return -1 here in obscure cases.
-				err = fmt.Errorf("too many values to unpack (got %d, want %d)", Len(iterable), n)
+				inFlightErr = fmt.Errorf("too many values to unpack (got %d, want %d)", Len(iterable), n)
 				break loop
 			}
 			iter.Done()
 			if i < n {
-				err = fmt.Errorf("too few values to unpack (got %d, want %d)", i, n)
+				inFlightErr = fmt.Errorf("too few values to unpack (got %d, want %d)", i, n)
 				break loop
 			}
 
@@ -557,7 +557,7 @@ loop:
 			sp--
 
 			if thread.Load == nil {
-				err = fmt.Errorf("load not implemented by this application")
+				inFlightErr = fmt.Errorf("load not implemented by this application")
 				break loop
 			}
 
@@ -565,7 +565,7 @@ loop:
 			dict, err2 := thread.Load(thread, module)
 			thread.beginProfSpan()
 			if err2 != nil {
-				err = wrappedError{
+				inFlightErr = wrappedError{
 					msg:   fmt.Sprintf("cannot load %s: %v", module, err2),
 					cause: err2,
 				}
@@ -576,9 +576,9 @@ loop:
 				from := string(stack[sp-1-i].(String))
 				v, ok := dict[from]
 				if !ok {
-					err = fmt.Errorf("load: name %s not found in module %s", from, module)
+					inFlightErr = fmt.Errorf("load: name %s not found in module %s", from, module)
 					if n := spell.Nearest(from, dict.Keys()); n != "" {
-						err = fmt.Errorf("%s (did you mean %s?)", err, n)
+						inFlightErr = fmt.Errorf("%s (did you mean %s?)", inFlightErr, n)
 					}
 					break loop
 				}
@@ -600,7 +600,7 @@ loop:
 		case compile.LOCAL:
 			x := locals[arg]
 			if x == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
 				break loop
 			}
 			stack[sp] = x
@@ -613,7 +613,7 @@ loop:
 		case compile.LOCALCELL:
 			v := locals[arg].(*cell).v
 			if v == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
 				break loop
 			}
 			stack[sp] = v
@@ -622,7 +622,7 @@ loop:
 		case compile.FREECELL:
 			v := fn.freevars[arg].(*cell).v
 			if v == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Freevars[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Freevars[arg].Name)
 				break loop
 			}
 			stack[sp] = v
@@ -631,7 +631,7 @@ loop:
 		case compile.GLOBAL:
 			x := fn.module.globals[arg]
 			if x == nil {
-				err = fmt.Errorf("global variable %s referenced before assignment", f.Prog.Globals[arg].Name)
+				inFlightErr = fmt.Errorf("global variable %s referenced before assignment", f.Prog.Globals[arg].Name)
 				break loop
 			}
 			stack[sp] = x
@@ -641,7 +641,7 @@ loop:
 			name := f.Prog.Names[arg]
 			x := fn.module.predeclared[name]
 			if x == nil {
-				err = fmt.Errorf("internal error: predeclared variable %s is uninitialized", name)
+				inFlightErr = fmt.Errorf("internal error: predeclared variable %s is uninitialized", name)
 				break loop
 			}
 			stack[sp] = x
@@ -651,34 +651,28 @@ loop:
 			stack[sp] = Universe[f.Prog.Names[arg]]
 			sp++
 
-		case compile.CATCH:
-			// TODO(mna): push a catch block on the catch stack from this pc (fr.pc
-			// as pc is already on the next one) until <arg> pc (inclusive - account
-			// for the fact that <arg> address might be a pc with args - this should
-			// be at the place where we check to pop the catch blocks).
-			//
-			// Then, the next opcode must be a JMP that jumps to the start of the
-			// block that is protected by this CATCH and on an exception, the VM will
-			// jump back to the addr that follows the JMP after the CATCH.
-			//
-			// So to properly encode a CATCH, it should be like so:
-			// 	001 CATCH <020>
-			// 	002 JMP <010>
-			// 	003 (ops for the CATCH block)
-			// 	...
-			// 	009 RETURN (or JMP or THROW etc. i.e. prevent falling into protected block that threw an exception again)
-			// 	010 start of protected block
-			// 	...
-			// 	020 end of protected block
-			// 	021 unprotected code
-
 		default:
-			err = fmt.Errorf("unimplemented: %s", op)
+			inFlightErr = fmt.Errorf("unimplemented: %s", op)
 			break loop
 		}
 	}
+
+	if inFlightErr != nil {
+		// TODO(mna): all places where inFlightErr is set are followed by 'break
+		// loop', so this would be the perfect spot to check for a catch block if
+		// the error is catchable (some, like thread cancelled, should not be).
+		for i := len(f.Catches) - 1; i >= 0; i-- {
+			c := f.Catches[i]
+			if c.Covers(fr.pc) {
+				// run that catch block
+				pc = c.StartPC
+				goto loop
+			}
+		}
+	}
+
 	// (deferred cleanup runs here)
-	return result, err
+	return result, inFlightErr
 }
 
 type wrappedError struct {

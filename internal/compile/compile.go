@@ -139,7 +139,6 @@ const ( //nolint:revive
 	ATTR         //                 x ATTR<name>          y           y = x.name
 	SETFIELD     //               x y SETFIELD<name>      -           x.name = y
 	UNPACK       //          iterable UNPACK<n>           vn ... v1
-	CATCH        //                 - CATCH<addr>         -           (catch block until specified address, must be followed by JMP)
 
 	// n>>8 is #positional args and n&0xff is #named args (pairs).
 	CALL        // fn positional named                CALL<n>        result
@@ -159,7 +158,6 @@ var opcodeNames = [...]string{
 	CALL_KW:      "call_kw ",
 	CALL_VAR:     "call_var",
 	CALL_VAR_KW:  "call_var_kw",
-	CATCH:        "catch",
 	CIRCUMFLEX:   "circumflex",
 	CJMP:         "cjmp",
 	CONSTANT:     "constant",
@@ -235,7 +233,6 @@ var stackEffect = [...]int8{
 	CALL_KW:      variableStackEffect,
 	CALL_VAR:     variableStackEffect,
 	CALL_VAR_KW:  variableStackEffect,
-	CATCH:        0,
 	CIRCUMFLEX:   -1,
 	CJMP:         -1,
 	CONSTANT:     +1,
@@ -337,6 +334,7 @@ type Funcode struct {
 	Locals                []Binding       // locals, parameters first
 	Cells                 []int           // indices of Locals that require cells
 	Freevars              []Binding       // for tracing
+	Catches               []Catch         // catch blocks, nested ones must come after the more general ones
 	MaxStack              int
 	NumParams             int
 	NumKwonlyParams       int
@@ -359,6 +357,21 @@ type Binding struct {
 	Pos  syntax.Position
 }
 
+// Catch is a catch block that runs if any error is raised by the instructions
+// that it covers. Emitted code for a catch block must ensure that there is a
+// JMP over the catch block (to PC0), that StartPC is the pc after that JMP,
+// and that the catch block does not fall through to the protected block - it
+// must end with a RETURN or JMP beyond PC1 or a CALL to a function that always
+// throws an error (a "rethrow"), etc.
+type Catch struct {
+	PC0, PC1 uint32 // start and end of protected instructions (inclusive), precondition: PC0 <= PC1
+	StartPC  uint32 // start of the catch instructions
+}
+
+func (c Catch) Covers(pc uint32) bool {
+	return c.PC0 <= pc && pc <= c.PC1
+}
+
 // A pcomp holds the compiler state for a Program.
 type pcomp struct {
 	prog *Program // what we're building
@@ -376,12 +389,15 @@ type fcomp struct {
 	pos   syntax.Position // current position of generated code
 	loops []loop
 	block *block
+	// TODO(mna): probably needs to keep track of catch blocks during compilation?
 }
 
 type loop struct {
 	break_, continue_ *block
 }
 
+// block is a block of code - every executable line of code is compiled inside
+// a block.
 type block struct {
 	insns []insn
 
@@ -891,7 +907,7 @@ func PrintOp(fn *Funcode, pc uint32, op Opcode, arg uint32) {
 	case CALL, CALL_VAR, CALL_KW, CALL_VAR_KW:
 		comment = fmt.Sprintf("%d pos, %d named", arg>>8, arg&0xff)
 	default:
-		// JMP, CJMP, ITERJMP, MAKETUPLE, MAKELIST, LOAD, UNPACK, CATCH:
+		// JMP, CJMP, ITERJMP, MAKETUPLE, MAKELIST, LOAD, UNPACK:
 		// arg is just a number
 	}
 	var buf bytes.Buffer
