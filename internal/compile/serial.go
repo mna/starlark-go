@@ -46,7 +46,7 @@ package compile
 //	hasvarargs	varint (0 or 1)
 //	haskwargs	varint (0 or 1)
 //
-// Ident:
+// Ident (Binding):
 //	filename	string
 //	line, col	varint
 //
@@ -154,6 +154,10 @@ func (e *encoder) int64(x int64) {
 	e.p = append(e.p, e.tmp[:n]...)
 }
 
+func (e *encoder) uint32(x uint32) {
+	e.uint64(uint64(x))
+}
+
 func (e *encoder) uint64(x uint64) {
 	n := binary.PutUvarint(e.tmp[:], x)
 	e.p = append(e.p, e.tmp[:n]...)
@@ -182,6 +186,19 @@ func (e *encoder) bindings(binds []Binding) {
 	}
 }
 
+func (e *encoder) catch(catch Catch) {
+	e.uint32(catch.PC0)
+	e.uint32(catch.PC1)
+	e.uint32(catch.StartPC)
+}
+
+func (e *encoder) catches(catches []Catch) {
+	e.int(len(catches))
+	for _, catch := range catches {
+		e.catch(catch)
+	}
+}
+
 func (e *encoder) function(fn *Funcode) {
 	e.binding(Binding{fn.Name, fn.Pos})
 	e.string(fn.Doc)
@@ -196,6 +213,7 @@ func (e *encoder) function(fn *Funcode) {
 		e.int(index)
 	}
 	e.bindings(fn.Freevars)
+	e.catches(fn.Catches)
 	e.int(fn.MaxStack)
 	e.int(fn.NumParams)
 	e.int(fn.NumKwonlyParams)
@@ -353,6 +371,21 @@ func (d *decoder) bindings() []Binding {
 	return bindings
 }
 
+func (d *decoder) catch() Catch {
+	pc0 := uint32(d.uint64())
+	pc1 := uint32(d.uint64())
+	spc := uint32(d.uint64())
+	return Catch{PC0: pc0, PC1: pc1, StartPC: spc}
+}
+
+func (d *decoder) catches() []Catch {
+	catches := make([]Catch, d.int())
+	for i := range catches {
+		catches[i] = d.catch()
+	}
+	return catches
+}
+
 func (d *decoder) ints() []int {
 	ints := make([]int, d.int())
 	for i := range ints {
@@ -375,6 +408,7 @@ func (d *decoder) function() *Funcode {
 	locals := d.bindings()
 	cells := d.ints()
 	freevars := d.bindings()
+	catches := d.catches()
 	maxStack := d.int()
 	numParams := d.int()
 	numKwonlyParams := d.int()
@@ -390,6 +424,7 @@ func (d *decoder) function() *Funcode {
 		Locals:          locals,
 		Cells:           cells,
 		Freevars:        freevars,
+		Catches:         catches,
 		MaxStack:        maxStack,
 		NumParams:       numParams,
 		NumKwonlyParams: numKwonlyParams,
