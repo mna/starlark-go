@@ -39,8 +39,8 @@ import (
 	"github.com/mna/nenuphar/syntax"
 )
 
-// Disassemble causes the assembly code for each function
-// to be printed to stderr as it is generated.
+// Disassemble causes the assembly code for each function to be printed to
+// stderr as it is generated during compilation.
 var Disassemble = false
 
 const debug = false // make code generation verbose, for debugging the compiler
@@ -125,7 +125,7 @@ const ( //nolint:revive
 	MAKETUPLE    //         x1 ... xn MAKETUPLE<n>        tuple
 	MAKELIST     //         x1 ... xn MAKELIST<n>         list
 	MAKEFUNC     // defaults+freevars MAKEFUNC<func>      fn
-	LOAD         //   from1 ... fromN module LOAD<n>      v1 ... vN
+	LOAD         //  from1..fromN mod LOAD<n>             v1 .. vN
 	SETLOCAL     //             value SETLOCAL<local>     -
 	SETGLOBAL    //             value SETGLOBAL<global>   -
 	LOCAL        //                 - LOCAL<local>        value
@@ -502,16 +502,16 @@ func bindings(bindings []*resolve.Binding) []Binding {
 	return res
 }
 
-// Expr compiles an expression to a program whose toplevel function evaluates it.
-// The options must be consistent with those used when parsing expr.
+// Expr compiles an expression to a program whose toplevel function evaluates
+// it. The options must be consistent with those used when parsing expr.
 func Expr(opts *syntax.FileOptions, expr syntax.Expr, name string, locals []*resolve.Binding) *Program {
 	pos := syntax.Start(expr)
 	stmts := []syntax.Stmt{&syntax.ReturnStmt{Result: expr}}
 	return File(opts, stmts, pos, name, locals, nil)
 }
 
-// File compiles the statements of a file into a program.
-// The options must be consistent with those used when parsing stmts.
+// File compiles the statements of a file into a program. The options must be
+// consistent with those used when parsing stmts.
 func File(opts *syntax.FileOptions, stmts []syntax.Stmt, pos syntax.Position, name string, locals, globals []*resolve.Binding) *Program {
 	pcomp := &pcomp{
 		prog: &Program{

@@ -40,6 +40,7 @@ package compile
 //	cells		[]int
 //	numfreevars	varint
 //	freevar		[]Ident
+//  catches   []Catch
 //	maxstack	varint
 //	numparams	varint
 //	numkwonlyparams	varint
@@ -49,6 +50,10 @@ package compile
 // Ident (Binding):
 //	filename	string
 //	line, col	varint
+//
+// Catch:
+//   pc0, pc1 varint
+//   startpc  varint
 //
 // Constant:                            # type      data
 //      type            varint          # 0=string  string
@@ -93,7 +98,7 @@ import (
 
 const magic = "!sky"
 
-// Encode encodes a compiled Starlark program.
+// Encode encodes a compiled program to binary format.
 func (prog *Program) Encode() []byte {
 	var e encoder
 	e.p = append(e.p, magic...)
@@ -228,7 +233,7 @@ func b2i(b bool) int {
 	return 0
 }
 
-// DecodeProgram decodes a compiled Starlark program from data.
+// DecodeProgram decodes a compiled program from binary format.
 func DecodeProgram(data []byte) (_ *Program, err error) {
 	if len(data) < len(magic) {
 		return nil, fmt.Errorf("not a compiled module: no magic number")
