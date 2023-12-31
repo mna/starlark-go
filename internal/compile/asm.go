@@ -69,12 +69,19 @@ func Asm(b []byte) (*Program, error) {
 	fields := asm.next()
 	asm.program(fields)
 
-	// loads, optional
+	// optional sections
 	fields = asm.next()
-	asm.loads(fields)
-	asm.names(fields)
-	asm.globals(fields)
-	asm.constants(fields)
+	fields = asm.loads(fields)
+	fields = asm.names(fields)
+	fields = asm.globals(fields)
+	fields = asm.constants(fields)
+
+	// top-level function, required
+	fields = asm.function(fields)
+	for len(fields) > 0 && fields[0] == "function:" {
+		// other functions
+		fields = asm.function(fields)
+	}
 
 	return asm.p, asm.err
 }
@@ -85,15 +92,15 @@ type asm struct {
 	err error
 }
 
-func (a *asm) constants(fields []string) {
+func (a *asm) constants(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "constants:") {
-		return
+		return fields
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
 		if len(fields) != 2 {
 			a.err = fmt.Errorf("invalid constant: expected type and value, got %d fields", len(fields))
-			return
+			return fields
 		}
 
 		switch fields[0] {
@@ -101,14 +108,14 @@ func (a *asm) constants(fields []string) {
 			i, err := strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
 				a.err = fmt.Errorf("invalid integer constant: %s: %w", fields[1], err)
-				return
+				return fields
 			}
 			a.p.Constants = append(a.p.Constants, i)
 		case "float":
 			f, err := strconv.ParseFloat(fields[1], 64)
 			if err != nil {
 				a.err = fmt.Errorf("invalid float constant: %s: %w", fields[1], err)
-				return
+				return fields
 			}
 			a.p.Constants = append(a.p.Constants, f)
 		case "bigint":
@@ -116,7 +123,7 @@ func (a *asm) constants(fields []string) {
 			bi, ok := bi.SetString(fields[1], 10)
 			if !ok {
 				a.err = fmt.Errorf("invalid bigint constant: %s", fields[1])
-				return
+				return fields
 			}
 			a.p.Constants = append(a.p.Constants, bi)
 		case "string":
@@ -125,39 +132,43 @@ func (a *asm) constants(fields []string) {
 			a.p.Constants = append(a.p.Constants, Bytes(fields[1]))
 		default:
 			a.err = fmt.Errorf("invalid constant type: %s", fields[0])
-			return
+			return fields
 		}
 	}
+	return fields
 }
 
-func (a *asm) globals(fields []string) {
+func (a *asm) globals(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "globals:") {
-		return
+		return fields
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
 		a.p.Globals = append(a.p.Globals, Binding{Name: fields[0]})
 	}
+	return fields
 }
 
-func (a *asm) names(fields []string) {
+func (a *asm) names(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "names:") {
-		return
+		return fields
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
 		a.p.Names = append(a.p.Names, fields[0])
 	}
+	return fields
 }
 
-func (a *asm) loads(fields []string) {
+func (a *asm) loads(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "loads:") {
-		return
+		return fields
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
 		a.p.Loads = append(a.p.Loads, Binding{Name: fields[0]})
 	}
+	return fields
 }
 
 func (a *asm) program(fields []string) {
