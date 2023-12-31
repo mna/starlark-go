@@ -221,6 +221,14 @@ var opcodeNames = [...]string{
 	UPLUS:        "uplus",
 }
 
+var reverseLookupOpcode = func() map[string]Opcode {
+	m := make(map[string]Opcode, len(opcodeNames))
+	for op, s := range opcodeNames {
+		m[s] = Opcode(op)
+	}
+	return m
+}()
+
 const variableStackEffect = 0x7f
 
 // stackEffect records the effect on the size of the operand stack of

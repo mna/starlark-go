@@ -3,6 +3,7 @@ package compile
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -76,20 +77,152 @@ func Asm(b []byte) (*Program, error) {
 	fields = asm.globals(fields)
 	fields = asm.constants(fields)
 
-	// top-level function, required
-	fields = asm.function(fields)
+	// functions
 	for len(fields) > 0 && fields[0] == "function:" {
-		// other functions
 		fields = asm.function(fields)
 	}
 
+	if len(fields) > 0 {
+		asm.err = fmt.Errorf("unexpected section: %s", fields[0])
+	} else if asm.p.Toplevel == nil {
+		asm.err = errors.New("missing top-level function")
+	}
 	return asm.p, asm.err
 }
 
 type asm struct {
 	s   *bufio.Scanner
 	p   *Program
+	fn  *Funcode // current function
 	err error
+}
+
+func (a *asm) function(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "function:") {
+		return fields
+	}
+
+	if len(fields) != 5 {
+		a.err = fmt.Errorf("invalid function: want at least 5 fields: 'function: NAME <stack> <params> <kwparams> [+varargs +kwargs]', got %d fields (%s)", len(fields), strings.Join(fields, " "))
+		return fields
+	}
+	fn := Funcode{
+		Prog:            a.p,
+		Name:            fields[1],
+		MaxStack:        int(a.int(fields[2])),
+		NumParams:       int(a.int(fields[3])),
+		NumKwonlyParams: int(a.int(fields[4])),
+		HasVarargs:      a.option(fields[5:], "varargs"),
+		HasKwargs:       a.option(fields[5:], "kwargs"),
+	}
+	a.fn = &fn
+
+	// function sub-sections
+	fields = a.next()
+	fields = a.locals(fields)
+	fields = a.cells(fields)
+	fields = a.freevars(fields)
+	fields = a.catches(fields)
+	fields = a.code(fields)
+
+	a.fn = nil
+	if a.p.Toplevel == nil {
+		a.p.Toplevel = &fn
+	} else {
+		a.p.Functions = append(a.p.Functions, &fn)
+	}
+	return fields
+}
+
+func (a *asm) code(fields []string) []string {
+	if a.err != nil {
+		return fields
+	}
+	if len(fields) == 0 || !strings.EqualFold(fields[0], "code:") {
+		a.err = fmt.Errorf("expected code section, found %s", fields[0])
+		return fields
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		op, ok := reverseLookupOpcode[strings.ToLower(fields[0])]
+		if !ok {
+			a.err = fmt.Errorf("invalid opcode: %s", fields[0])
+			return fields
+		}
+
+		if op >= OpcodeArgMin {
+			// an argument is required
+			if len(fields) != 2 {
+				a.err = fmt.Errorf("expected an argument for opcode %s, got %d fields", fields[0], len(fields))
+				return fields
+			}
+		} else if len(fields) != 1 {
+			a.err = fmt.Errorf("expected no argument for opcode %s, got %d fields", fields[0], len(fields))
+			return fields
+		}
+	}
+	return fields
+}
+
+func (a *asm) catches(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "catches:") {
+		return fields
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		if len(fields) != 3 {
+			a.err = fmt.Errorf("invalid catch: expected pc0, pc1 and startpc, got %d fields", len(fields))
+			return fields
+		}
+
+		a.fn.Catches = append(a.fn.Catches, Catch{
+			PC0:     uint32(a.uint(fields[0])),
+			PC1:     uint32(a.uint(fields[1])),
+			StartPC: uint32(a.uint(fields[2])),
+		})
+	}
+	return fields
+}
+
+func (a *asm) freevars(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "freevars:") {
+		return fields
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		a.fn.Freevars = append(a.fn.Freevars, Binding{Name: fields[0]})
+	}
+	return fields
+}
+
+func (a *asm) cells(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "cells:") {
+		return fields
+	}
+
+outer:
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		for i, l := range a.fn.Locals {
+			if l.Name == fields[0] {
+				a.fn.Cells = append(a.fn.Cells, i)
+				continue outer
+			}
+		}
+		a.err = fmt.Errorf("invalid cell: %q is not an existing local", fields[0])
+		return fields
+	}
+	return fields
+}
+
+func (a *asm) locals(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "locals:") {
+		return fields
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		a.fn.Locals = append(a.fn.Locals, Binding{Name: fields[0]})
+	}
+	return fields
 }
 
 func (a *asm) constants(fields []string) []string {
@@ -105,16 +238,11 @@ func (a *asm) constants(fields []string) []string {
 
 		switch fields[0] {
 		case "int":
-			i, err := strconv.ParseInt(fields[1], 10, 64)
-			if err != nil {
-				a.err = fmt.Errorf("invalid integer constant: %s: %w", fields[1], err)
-				return fields
-			}
-			a.p.Constants = append(a.p.Constants, i)
+			a.p.Constants = append(a.p.Constants, a.int(fields[1]))
 		case "float":
 			f, err := strconv.ParseFloat(fields[1], 64)
 			if err != nil {
-				a.err = fmt.Errorf("invalid float constant: %s: %w", fields[1], err)
+				a.err = fmt.Errorf("invalid float: %s: %w", fields[1], err)
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, f)
@@ -122,7 +250,7 @@ func (a *asm) constants(fields []string) []string {
 			bi := big.NewInt(0)
 			bi, ok := bi.SetString(fields[1], 10)
 			if !ok {
-				a.err = fmt.Errorf("invalid bigint constant: %s", fields[1])
+				a.err = fmt.Errorf("invalid bigint: %s", fields[1])
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, bi)
@@ -195,6 +323,22 @@ func (a *asm) option(fields []string, opt string) bool {
 		}
 	}
 	return false
+}
+
+func (a *asm) int(s string) int64 {
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		a.err = fmt.Errorf("invalid integer: %s: %w", s, err)
+	}
+	return i
+}
+
+func (a *asm) uint(s string) uint64 {
+	u, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		a.err = fmt.Errorf("invalid unsigned integer: %s: %w", s, err)
+	}
+	return u
 }
 
 // returns the fields for the next non-empty, non-comment-only line, so that
