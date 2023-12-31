@@ -816,16 +816,8 @@ func (fcomp *fcomp) generate(blocks []*block, codelen uint32) {
 			if Disassemble {
 				PrintOp(fcomp.fn, pc, insn.op, insn.arg)
 			}
-			code = append(code, byte(insn.op))
-			pc++
-			if insn.op >= OpcodeArgMin {
-				if insn.op == CJMP || insn.op == ITERJMP {
-					code = addUint32(code, insn.arg, 4) // pad arg to 4 bytes
-				} else {
-					code = addUint32(code, insn.arg, 0)
-				}
-				pc = uint32(len(code))
-			}
+			code = encodeInsn(code, insn.op, insn.arg)
+			pc = uint32(len(code))
 		}
 
 		if b.jmp != nil && b.jmp.index != b.index+1 {
@@ -834,8 +826,7 @@ func (fcomp *fcomp) generate(blocks []*block, codelen uint32) {
 				fmt.Fprintf(os.Stderr, "\t%d\tjmp\t\t%d\t; block %d\n",
 					pc, addr, b.jmp.index)
 			}
-			code = append(code, byte(JMP))
-			code = addUint32(code, addr, 4)
+			code = encodeInsn(code, JMP, addr)
 		}
 	}
 	if len(code) != int(codelen) {
@@ -855,6 +846,18 @@ func clip(x, min, max int32) (int32, bool) {
 		return min, false
 	}
 	return x, true
+}
+
+func encodeInsn(code []byte, op Opcode, arg uint32) []byte {
+	code = append(code, byte(op))
+	if op >= OpcodeArgMin {
+		if op == CJMP || op == ITERJMP || op == JMP {
+			code = addUint32(code, arg, 4) // pad arg to 4 bytes
+		} else {
+			code = addUint32(code, arg, 0)
+		}
+	}
+	return code
 }
 
 // addUint32 encodes x as 7-bit little-endian varint.

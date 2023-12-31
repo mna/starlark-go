@@ -82,10 +82,12 @@ func Asm(b []byte) (*Program, error) {
 		fields = asm.function(fields)
 	}
 
-	if len(fields) > 0 {
-		asm.err = fmt.Errorf("unexpected section: %s", fields[0])
-	} else if asm.p.Toplevel == nil {
-		asm.err = errors.New("missing top-level function")
+	if asm.err == nil {
+		if len(fields) > 0 {
+			asm.err = fmt.Errorf("unexpected section: %s", fields[0])
+		} else if asm.p.Toplevel == nil {
+			asm.err = errors.New("missing top-level function")
+		}
 	}
 	return asm.p, asm.err
 }
@@ -104,6 +106,8 @@ func (a *asm) function(fields []string) []string {
 
 	if len(fields) != 5 {
 		a.err = fmt.Errorf("invalid function: want at least 5 fields: 'function: NAME <stack> <params> <kwparams> [+varargs +kwargs]', got %d fields (%s)", len(fields), strings.Join(fields, " "))
+		// force going forward, otherwise it would still process that line
+		fields = a.next()
 		return fields
 	}
 	fn := Funcode{
@@ -139,7 +143,11 @@ func (a *asm) code(fields []string) []string {
 		return fields
 	}
 	if len(fields) == 0 || !strings.EqualFold(fields[0], "code:") {
-		a.err = fmt.Errorf("expected code section, found %s", fields[0])
+		msg := "expected code section"
+		if len(fields) > 0 {
+			msg += ", found " + fields[0]
+		}
+		a.err = errors.New(msg)
 		return fields
 	}
 
@@ -150,16 +158,19 @@ func (a *asm) code(fields []string) []string {
 			return fields
 		}
 
+		var arg uint32
 		if op >= OpcodeArgMin {
 			// an argument is required
 			if len(fields) != 2 {
 				a.err = fmt.Errorf("expected an argument for opcode %s, got %d fields", fields[0], len(fields))
 				return fields
 			}
+			arg = uint32(a.uint(fields[1]))
 		} else if len(fields) != 1 {
 			a.err = fmt.Errorf("expected no argument for opcode %s, got %d fields", fields[0], len(fields))
 			return fields
 		}
+		a.fn.Code = encodeInsn(a.fn.Code, op, arg)
 	}
 	return fields
 }
@@ -304,7 +315,11 @@ func (a *asm) program(fields []string) {
 		return
 	}
 	if len(fields) == 0 || !strings.EqualFold(fields[0], "program:") {
-		a.err = fmt.Errorf("expected program section, found %s", fields[0])
+		msg := "expected program section"
+		if len(fields) > 0 {
+			msg += ", found " + fields[0]
+		}
+		a.err = errors.New(msg)
 		return
 	}
 
