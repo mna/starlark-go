@@ -31,6 +31,7 @@ linters-settings:
           - github.com/mna/nenuphar
           - github.com/chzyer/readline
           - github.com/google/go-cmp/cmp
+          - github.com/stretchr/testify
 
   revive:
     ignoreGeneratedHeader: false

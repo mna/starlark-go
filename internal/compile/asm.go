@@ -78,7 +78,7 @@ func Asm(b []byte) (*Program, error) {
 	fields = asm.constants(fields)
 
 	// functions
-	for len(fields) > 0 && fields[0] == "function:" {
+	for asm.err == nil && len(fields) > 0 && fields[0] == "function:" {
 		fields = asm.function(fields)
 	}
 
@@ -104,7 +104,7 @@ func (a *asm) function(fields []string) []string {
 		return fields
 	}
 
-	if len(fields) != 5 {
+	if len(fields) < 5 {
 		a.err = fmt.Errorf("invalid function: want at least 5 fields: 'function: NAME <stack> <params> <kwparams> [+varargs +kwargs]', got %d fields (%s)", len(fields), strings.Join(fields, " "))
 		// force going forward, otherwise it would still process that line
 		fields = a.next()
@@ -128,6 +128,8 @@ func (a *asm) function(fields []string) []string {
 	fields = a.freevars(fields)
 	fields = a.catches(fields)
 	fields = a.code(fields)
+
+	// TODO: validate that catch blocks point to valid addresses
 
 	a.fn = nil
 	if a.p.Toplevel == nil {
@@ -266,9 +268,19 @@ func (a *asm) constants(fields []string) []string {
 			}
 			a.p.Constants = append(a.p.Constants, bi)
 		case "string":
-			a.p.Constants = append(a.p.Constants, fields[1])
+			s, err := strconv.Unquote(fields[1])
+			if err != nil {
+				a.err = fmt.Errorf("invalid string: %q: %w", fields[1], err)
+				return fields
+			}
+			a.p.Constants = append(a.p.Constants, s)
 		case "bytes":
-			a.p.Constants = append(a.p.Constants, Bytes(fields[1]))
+			s, err := strconv.Unquote(fields[1])
+			if err != nil {
+				a.err = fmt.Errorf("invalid bytes: %q: %w", fields[1], err)
+				return fields
+			}
+			a.p.Constants = append(a.p.Constants, Bytes(s))
 		default:
 			a.err = fmt.Errorf("invalid constant type: %s", fields[0])
 			return fields
