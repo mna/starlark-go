@@ -99,7 +99,7 @@ const ( //nolint:revive
 	FALSE     // - FALSE False
 	MANDATORY // - MANDATORY Mandatory	     [sentinel value for required kwonly args]
 
-	ITERPUSH     //       iterable ITERPUSH     -  [pushes the iterator stack]
+	ITERPUSH     //       iterable ITERPUSH     -    [pushes the iterator stack]
 	ITERPOP      //              - ITERPOP      -    [pops the iterator stack]
 	NOT          //          value NOT          bool
 	RETURN       //          value RETURN       -

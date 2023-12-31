@@ -42,10 +42,10 @@ import (
 // 		freevars:                          # optional, list of Freevars
 // 			y
 // 		catches:                           # optional, list of Catch blocks
-// 			10 20 5                          # address of pc0-pc1 and startpc
+// 			10 20 5                          # index of pc0-pc1 and startpc in code section (will be translated to pc address)
 // 		code:                              # required, list of instructions
 //			NOP
-// 			JMP 3
+// 			JMP 3                            # jump argument refers to index in code section (will be translated to pc address)
 // 			CALL 2
 
 var sections = map[string]bool{
@@ -129,7 +129,7 @@ func (a *asm) function(fields []string) []string {
 	fields = a.catches(fields)
 	fields = a.code(fields)
 
-	// TODO: validate that catch blocks point to valid addresses
+	// TODO: validate that catch blocks point to valid instruction and translate to pc
 
 	a.fn = nil
 	if a.p.Toplevel == nil {
@@ -172,6 +172,7 @@ func (a *asm) code(fields []string) []string {
 			a.err = fmt.Errorf("expected no argument for opcode %s, got %d fields", fields[0], len(fields))
 			return fields
 		}
+		// TODO: if a JMP, translate argument to an address (pc)
 		a.fn.Code = encodeInsn(a.fn.Code, op, arg)
 	}
 	return fields
