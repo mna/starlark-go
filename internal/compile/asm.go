@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +47,20 @@ import (
 // 			JMP 3
 // 			CALL 2
 
+var sections = map[string]bool{
+	"program:":   true,
+	"loads:":     true,
+	"names:":     true,
+	"globals:":   true,
+	"constants:": true,
+	"function:":  true,
+	"locals:":    true,
+	"cells:":     true,
+	"freevars:":  true,
+	"catches:":   true,
+	"code:":      true,
+}
+
 // Asm loads a compiled program from its assembler textual format.
 func Asm(b []byte) (*Program, error) {
 	asm := asm{s: bufio.NewScanner(bytes.NewReader(b))}
@@ -53,6 +69,13 @@ func Asm(b []byte) (*Program, error) {
 	fields := asm.next()
 	asm.program(fields)
 
+	// loads, optional
+	fields = asm.next()
+	asm.loads(fields)
+	asm.names(fields)
+	asm.globals(fields)
+	asm.constants(fields)
+
 	return asm.p, asm.err
 }
 
@@ -60,6 +83,81 @@ type asm struct {
 	s   *bufio.Scanner
 	p   *Program
 	err error
+}
+
+func (a *asm) constants(fields []string) {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "constants:") {
+		return
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		if len(fields) != 2 {
+			a.err = fmt.Errorf("invalid constant: expected type and value, got %d fields", len(fields))
+			return
+		}
+
+		switch fields[0] {
+		case "int":
+			i, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				a.err = fmt.Errorf("invalid integer constant: %s: %w", fields[1], err)
+				return
+			}
+			a.p.Constants = append(a.p.Constants, i)
+		case "float":
+			f, err := strconv.ParseFloat(fields[1], 64)
+			if err != nil {
+				a.err = fmt.Errorf("invalid float constant: %s: %w", fields[1], err)
+				return
+			}
+			a.p.Constants = append(a.p.Constants, f)
+		case "bigint":
+			bi := big.NewInt(0)
+			bi, ok := bi.SetString(fields[1], 10)
+			if !ok {
+				a.err = fmt.Errorf("invalid bigint constant: %s", fields[1])
+				return
+			}
+			a.p.Constants = append(a.p.Constants, bi)
+		case "string":
+			a.p.Constants = append(a.p.Constants, fields[1])
+		case "bytes":
+			a.p.Constants = append(a.p.Constants, Bytes(fields[1]))
+		default:
+			a.err = fmt.Errorf("invalid constant type: %s", fields[0])
+			return
+		}
+	}
+}
+
+func (a *asm) globals(fields []string) {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "globals:") {
+		return
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		a.p.Globals = append(a.p.Globals, Binding{Name: fields[0]})
+	}
+}
+
+func (a *asm) names(fields []string) {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "names:") {
+		return
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		a.p.Names = append(a.p.Names, fields[0])
+	}
+}
+
+func (a *asm) loads(fields []string) {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "loads:") {
+		return
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		a.p.Loads = append(a.p.Loads, Binding{Name: fields[0]})
+	}
 }
 
 func (a *asm) program(fields []string) {
