@@ -127,9 +127,30 @@ func (a *asm) function(fields []string) []string {
 	fields = a.cells(fields)
 	fields = a.freevars(fields)
 	fields = a.catches(fields)
-	fields = a.code(fields)
+	fields, indexToAddr := a.code(fields)
 
-	// TODO: validate that catch blocks point to valid instruction and translate to pc
+	if a.err == nil {
+		// resolve the catch addresses
+		for i, catch := range a.fn.Catches {
+			if catch.PC0 >= uint32(len(indexToAddr)) {
+				a.err = fmt.Errorf("invalid PC0 index %d: catch at index %d", catch.PC0, i)
+				return fields
+			}
+			catch.PC0 = uint32(indexToAddr[catch.PC0])
+
+			if catch.PC1 >= uint32(len(indexToAddr)) {
+				a.err = fmt.Errorf("invalid PC1 index %d: catch at index %d", catch.PC1, i)
+				return fields
+			}
+			catch.PC1 = uint32(indexToAddr[catch.PC1])
+
+			if catch.StartPC >= uint32(len(indexToAddr)) {
+				a.err = fmt.Errorf("invalid StartPC index %d: catch at index %d", catch.StartPC, i)
+				return fields
+			}
+			catch.StartPC = uint32(indexToAddr[catch.StartPC])
+		}
+	}
 
 	a.fn = nil
 	if a.p.Toplevel == nil {
@@ -140,9 +161,13 @@ func (a *asm) function(fields []string) []string {
 	return fields
 }
 
-func (a *asm) code(fields []string) []string {
+// parses code section and translates jump addresses to addresses, returning
+// both the next fields to parse and the mapping of instruction index in the
+// code section to address in the encoded code slice.
+func (a *asm) code(fields []string) ([]string, []int) {
+	var indexToAddr []int
 	if a.err != nil {
-		return fields
+		return fields, indexToAddr
 	}
 	if len(fields) == 0 || !strings.EqualFold(fields[0], "code:") {
 		msg := "expected code section"
@@ -150,14 +175,16 @@ func (a *asm) code(fields []string) []string {
 			msg += ", found " + fields[0]
 		}
 		a.err = errors.New(msg)
-		return fields
+		return fields, indexToAddr
 	}
 
+	var insns []insn
+	var addr int
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
 		op, ok := reverseLookupOpcode[strings.ToLower(fields[0])]
 		if !ok {
 			a.err = fmt.Errorf("invalid opcode: %s", fields[0])
-			return fields
+			return fields, indexToAddr
 		}
 
 		var arg uint32
@@ -165,17 +192,32 @@ func (a *asm) code(fields []string) []string {
 			// an argument is required
 			if len(fields) != 2 {
 				a.err = fmt.Errorf("expected an argument for opcode %s, got %d fields", fields[0], len(fields))
-				return fields
+				return fields, indexToAddr
 			}
 			arg = uint32(a.uint(fields[1]))
 		} else if len(fields) != 1 {
 			a.err = fmt.Errorf("expected no argument for opcode %s, got %d fields", fields[0], len(fields))
-			return fields
+			return fields, indexToAddr
 		}
-		// TODO: if a JMP, translate argument to an address (pc)
+		insns = append(insns, insn{op: op, arg: arg})
+		indexToAddr = append(indexToAddr, addr)
+		addr += encodedSize(op, arg)
+	}
+
+	// encode the instructions with the translated addresses
+	for i, insn := range insns {
+		op, arg := insn.op, insn.arg
+		if isJump(op) {
+			if arg >= uint32(len(indexToAddr)) {
+				a.err = fmt.Errorf("invalid jump index %d: instruction %s at index %d", arg, op, i)
+				return fields, indexToAddr
+			}
+			arg = uint32(indexToAddr[arg])
+		}
 		a.fn.Code = encodeInsn(a.fn.Code, op, arg)
 	}
-	return fields
+
+	return fields, indexToAddr
 }
 
 func (a *asm) catches(fields []string) []string {

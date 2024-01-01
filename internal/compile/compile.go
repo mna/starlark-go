@@ -148,6 +148,8 @@ const ( //nolint:revive
 
 	OpcodeArgMin = JMP
 	OpcodeMax    = CALL_VAR_KW
+	opcodeJMPMin = JMP
+	opcodeJMPMax = ITERJMP
 )
 
 var opcodeNames = [...]string{
@@ -228,6 +230,21 @@ var reverseLookupOpcode = func() map[string]Opcode {
 	}
 	return m
 }()
+
+func isJump(op Opcode) bool {
+	// Jump op argument is always encoded with 4 bytes
+	return opcodeJMPMin <= op && op <= opcodeJMPMax
+}
+
+func encodedSize(op Opcode, arg uint32) int {
+	if op >= OpcodeArgMin {
+		if isJump(op) {
+			return 1 + 4
+		}
+		return 1 + varArgLen(arg)
+	}
+	return 1
+}
 
 const variableStackEffect = 0x7f
 
@@ -615,7 +632,7 @@ func (pcomp *pcomp) function(name string, pos syntax.Position, stmts []syntax.St
 					cjmpAddr = &b.insns[i].arg
 					pc += 4
 				default:
-					pc += uint32(argLen(insn.arg))
+					pc += uint32(varArgLen(insn.arg))
 				}
 			}
 
@@ -851,7 +868,7 @@ func clip(x, min, max int32) (int32, bool) {
 func encodeInsn(code []byte, op Opcode, arg uint32) []byte {
 	code = append(code, byte(op))
 	if op >= OpcodeArgMin {
-		if op == CJMP || op == ITERJMP || op == JMP {
+		if isJump(op) {
 			code = addUint32(code, arg, 4) // pad arg to 4 bytes
 		} else {
 			code = addUint32(code, arg, 0)
@@ -877,7 +894,7 @@ func addUint32(code []byte, x uint32, min int) []byte {
 	return code
 }
 
-func argLen(x uint32) int {
+func varArgLen(x uint32) int {
 	n := 0
 	for x >= 0x80 {
 		n++

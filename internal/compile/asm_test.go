@@ -76,6 +76,14 @@ func TestAsm(t *testing.T) {
 							NOP 1
 				`, "expected no argument for opcode NOP"},
 
+		{"invalid jump address", `
+				program:
+					function: Top 0 0 0
+						code:
+							NOP
+							JMP 2
+				`, "invalid jump index 2"},
+
 		{"invalid catch number of fields", `
 				program:
 					function: Top 0 0 0
@@ -93,6 +101,35 @@ func TestAsm(t *testing.T) {
 						code:
 							NOP
 				`, "invalid unsigned integer"},
+
+		{"invalid catch address pc0", `
+				program:
+					function: Top 0 0 0
+						catches:
+							1 2 3
+						code:
+							NOP
+				`, "invalid PC0 index 1"},
+
+		{"invalid catch address pc1", `
+				program:
+					function: Top 0 0 0
+						catches:
+							0 2 3
+						code:
+							NOP
+				`, "invalid PC1 index 2"},
+
+		{"invalid catch address startpc", `
+				program:
+					function: Top 0 0 0
+						catches:
+							0 2 3
+						code:
+							NOP
+							NOP
+							NOP
+				`, "invalid StartPC index 3"},
 
 		{"invalid cell", `
 				program:
