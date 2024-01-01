@@ -1,9 +1,19 @@
 package compile_test
 
 import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/mna/nenuphar/internal/chunkedfile"
 	"github.com/mna/nenuphar/internal/compile"
+	"github.com/mna/nenuphar/starlark"
+	"github.com/mna/nenuphar/starlarkstruct"
+	"github.com/mna/nenuphar/syntax"
 	"github.com/stretchr/testify/require"
 )
 
@@ -302,4 +312,124 @@ func TestDasm(t *testing.T) {
 			require.ErrorContains(t, err, c.err)
 		})
 	}
+}
+
+func TestAsmRoundtrip(t *testing.T) {
+	dir := filepath.Join("..", "..", "starlark", "testdata")
+	des, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	for _, de := range des {
+		if de.IsDir() || !de.Type().IsRegular() || filepath.Ext(de.Name()) != ".star" {
+			continue
+		}
+		filename := filepath.Join(dir, de.Name())
+		for i, chunk := range chunkedfile.Read(filename, t) {
+			t.Run(fmt.Sprintf("%s chunk %d", filename, i), func(t *testing.T) {
+				predeclared := starlark.StringDict{
+					"hasfields": starlark.True,
+					"fibonacci": starlark.True,
+					"struct":    starlark.NewBuiltin("struct", starlarkstruct.Make),
+				}
+
+				opts := getOptions(chunk.Source)
+				_, prog, err := starlark.SourceProgramOptions(opts, filename+"_chunk_"+strconv.Itoa(i), chunk.Source, predeclared.Has)
+				require.NoError(t, err)
+
+				var buf bytes.Buffer
+				require.NoError(t, prog.Write(&buf))
+				rawProg, err := compile.DecodeProgram(buf.Bytes())
+				require.NoError(t, err)
+				clearPosInfo(rawProg)
+
+				// assemble and disassemble prog, should be equivalent to rawProg
+				// without position information
+				asmData, err := compile.Dasm(rawProg)
+				require.NoError(t, err)
+				t.Log(string(asmData))
+				dasmProg, err := compile.Asm(asmData)
+				require.NoError(t, err)
+
+				require.Equal(t, rawProg, dasmProg)
+			})
+		}
+	}
+}
+
+func clearPosInfo(p *compile.Program) {
+	if len(p.Loads) == 0 {
+		p.Loads = nil
+	}
+	if len(p.Names) == 0 {
+		p.Names = nil
+	}
+	if len(p.Constants) == 0 {
+		p.Constants = nil
+	}
+	if len(p.Functions) == 0 {
+		p.Functions = nil
+	}
+	if len(p.Globals) == 0 {
+		p.Globals = nil
+	}
+
+	for i, l := range p.Loads {
+		l.Pos = syntax.Position{}
+		p.Loads[i] = l
+	}
+	for i, g := range p.Globals {
+		g.Pos = syntax.Position{}
+		p.Globals[i] = g
+	}
+
+	clearFunc := func(fn *compile.Funcode) {
+		fn.Pos = syntax.Position{}
+		fn.Doc = ""
+		fn.ClearPCLineTab()
+
+		if len(fn.Code) == 0 {
+			fn.Code = nil
+		}
+		if len(fn.Locals) == 0 {
+			fn.Locals = nil
+		}
+		if len(fn.Cells) == 0 {
+			fn.Cells = nil
+		}
+		if len(fn.Freevars) == 0 {
+			fn.Freevars = nil
+		}
+		if len(fn.Catches) == 0 {
+			fn.Catches = nil
+		}
+
+		for i, l := range fn.Locals {
+			l.Pos = syntax.Position{}
+			fn.Locals[i] = l
+		}
+		for i, f := range fn.Freevars {
+			f.Pos = syntax.Position{}
+			fn.Freevars[i] = f
+		}
+	}
+
+	clearFunc(p.Toplevel)
+	for _, f := range p.Functions {
+		clearFunc(f)
+	}
+}
+
+func getOptions(src string) *syntax.FileOptions {
+	return &syntax.FileOptions{
+		Set:               option(src, "set"),
+		While:             option(src, "while"),
+		TopLevelControl:   option(src, "toplevelcontrol"),
+		GlobalReassign:    option(src, "globalreassign"),
+		LoadBindsGlobally: option(src, "loadbindsglobally"),
+		Recursion:         option(src, "recursion"),
+	}
+}
+
+func option(chunk, name string) bool {
+	return strings.Contains(chunk, "option:"+name)
 }

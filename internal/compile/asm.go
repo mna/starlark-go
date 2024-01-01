@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -95,10 +96,11 @@ func Asm(b []byte) (*Program, error) {
 }
 
 type asm struct {
-	s   *bufio.Scanner
-	p   *Program
-	fn  *Funcode // current function
-	err error
+	s       *bufio.Scanner
+	rawLine string // current raw line (not split in fields)
+	p       *Program
+	fn      *Funcode // current function
+	err     error
 }
 
 func (a *asm) function(fields []string) []string {
@@ -283,13 +285,18 @@ func (a *asm) locals(fields []string) []string {
 	return fields
 }
 
+var rxConstLineString = regexp.MustCompile(`^\s*(?:string|bytes)\s+(.+)$`)
+
 func (a *asm) constants(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "constants:") {
 		return fields
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
-		if len(fields) != 2 {
+		// TODO: string and bytes constants may have whitespace in the value, need to keep
+		// the raw line around and extract the whole quoted value from the raw line.
+		strVal := rxConstLineString.FindStringSubmatch(a.rawLine)
+		if strVal == nil && len(fields) != 2 {
 			a.err = fmt.Errorf("invalid constant: expected type and value, got %d fields", len(fields))
 			return fields
 		}
@@ -313,16 +320,26 @@ func (a *asm) constants(fields []string) []string {
 			}
 			a.p.Constants = append(a.p.Constants, bi)
 		case "string":
-			s, err := strconv.Unquote(fields[1])
+			qs, err := strconv.QuotedPrefix(strVal[1])
 			if err != nil {
-				a.err = fmt.Errorf("invalid string: %q: %w", fields[1], err)
+				a.err = fmt.Errorf("invalid string: %q: %w", strVal[1], err)
+				return fields
+			}
+			s, err := strconv.Unquote(qs)
+			if err != nil {
+				a.err = fmt.Errorf("invalid string: %q: %w", qs, err)
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, s)
 		case "bytes":
-			s, err := strconv.Unquote(fields[1])
+			qs, err := strconv.QuotedPrefix(strVal[1])
 			if err != nil {
-				a.err = fmt.Errorf("invalid bytes: %q: %w", fields[1], err)
+				a.err = fmt.Errorf("invalid bytes: %q: %w", strVal[1], err)
+				return fields
+			}
+			s, err := strconv.Unquote(qs)
+			if err != nil {
+				a.err = fmt.Errorf("invalid bytes: %q: %w", qs, err)
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, Bytes(s))
@@ -416,6 +433,7 @@ func (a *asm) uint(s string) uint64 {
 // returns the fields for the next non-empty, non-comment-only line, so that
 // fields[0] will contain the line identification if it is a section.
 func (a *asm) next() []string {
+	a.rawLine = ""
 	if a.err != nil {
 		return nil
 	}
@@ -430,6 +448,7 @@ func (a *asm) next() []string {
 					break
 				}
 			}
+			a.rawLine = line
 			return fields
 		}
 	}
@@ -486,7 +505,7 @@ func (d *dasm) function(fn *Funcode) {
 	if len(fn.Cells) > 0 {
 		d.write("\tcells:\n")
 		for i, c := range fn.Cells {
-			d.writef("\t\t%s\t# %03d\n", fn.Locals[c], i)
+			d.writef("\t\t%s\t# %03d\n", fn.Locals[c].Name, i)
 		}
 	}
 	if len(fn.Freevars) > 0 {

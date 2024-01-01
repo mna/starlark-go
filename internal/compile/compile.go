@@ -157,7 +157,7 @@ var opcodeNames = [...]string{
 	APPEND:       "append",
 	ATTR:         "attr",
 	CALL:         "call",
-	CALL_KW:      "call_kw ",
+	CALL_KW:      "call_kw",
 	CALL_VAR:     "call_var",
 	CALL_VAR_KW:  "call_var_kw",
 	CIRCUMFLEX:   "circumflex",
