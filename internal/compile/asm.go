@@ -636,7 +636,7 @@ func (d *dasm) program() {
 			case int64:
 				d.writef("\t\tint\t%d\t# %03d\n", c, i)
 			case float64:
-				d.writef("\t\tfloat\t%f\t# %03d\n", c, i)
+				d.writef("\t\tfloat\t%g\t# %03d\n", c, i)
 			case *big.Int:
 				d.writef("\t\tbigint\t%d\t# %03d\n", c, i)
 			default:
