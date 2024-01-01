@@ -3,8 +3,10 @@ package compile
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -481,6 +483,69 @@ func (d *dasm) function(fn *Funcode) {
 		d.write("\tfreevars:\n")
 		for i, f := range fn.Freevars {
 			d.writef("\t\t%s\t# %03d\n", f.Name, i)
+		}
+	}
+
+	// decode all instructions to translate addresses to index
+	var insns []insn
+	addrToIndex := make([]int, len(fn.Code))
+	// initialize to -1 to identify invalid jumps
+	for i := range addrToIndex {
+		addrToIndex[i] = -1
+	}
+	var addr int
+	for addr < len(fn.Code) {
+		op := Opcode(fn.Code[addr])
+		sz := 1
+
+		var arg uint32
+		if op >= OpcodeArgMin {
+			v, n := binary.Uvarint(fn.Code[addr+1:])
+			if n <= 0 || v > math.MaxUint32 {
+				panic(fmt.Sprintf("invalid uvarint argument in function %s code at index %d (%s)", fn.Name, addr, op))
+			}
+			arg = uint32(v)
+
+			if isJump(op) && n < 4 {
+				n = 4
+			}
+			sz += n
+		}
+
+		addrToIndex[addr] = len(insns)
+		insns = append(insns, insn{op: op, arg: arg})
+		addr += sz
+	}
+
+	if len(fn.Catches) > 0 {
+		d.write("\tcatches:\n")
+		for i, c := range fn.Catches {
+			pc0, pc1, spc := addrToIndex[c.PC0], addrToIndex[c.PC1], addrToIndex[c.StartPC]
+			if pc0 < 0 {
+				panic(fmt.Sprintf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i))
+			}
+			if pc1 < 0 {
+				panic(fmt.Sprintf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i))
+			}
+			if spc < 0 {
+				panic(fmt.Sprintf("invalid catch.startpc address in function %s, catch %d", fn.Name, i))
+			}
+			d.writef("\t\t%03d %03d %03d\t# %03d\n", pc0, pc1, spc, i)
+		}
+	}
+
+	if len(insns) > 0 {
+		d.write("\tcode:\n")
+		for i, insn := range insns {
+			op, arg := insn.op, insn.arg
+			if op >= OpcodeArgMin {
+				if isJump(op) {
+					arg = uint32(addrToIndex[arg])
+				}
+				d.writef("\t\t%s %03d\t# %03d\n", op, arg, i)
+			} else {
+				d.writef("\t\t%s\t# %03d\n", op, i)
+			}
 		}
 	}
 }
