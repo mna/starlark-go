@@ -237,3 +237,68 @@ func TestAsm(t *testing.T) {
 		})
 	}
 }
+
+func TestDasm(t *testing.T) {
+	cases := []struct {
+		desc string
+		p    compile.Program
+		err  string // error "contains" this err string, no error if empty
+	}{
+		{"empty", compile.Program{}, "missing top-level function"},
+
+		{"invalid constant type", compile.Program{
+			Toplevel:  &compile.Funcode{},
+			Constants: []any{true},
+		}, "unsupported constant type: bool"},
+
+		{"invalid opcode argument", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code: []byte{byte(compile.JMP), '\xff', '\xff', '\xff', '\xff', '\xff', '\x00'},
+			},
+		}, "invalid uvarint argument"},
+
+		{"invalid catch.pc0", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code:    []byte{byte(compile.NOP), byte(compile.NOP)},
+				Catches: []compile.Catch{{PC0: 2, PC1: 3, StartPC: 0}},
+			},
+		}, "invalid catch.pc0 address"},
+
+		{"invalid catch.pc1", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code:    []byte{byte(compile.JMP), '\xff', '\x00', byte(compile.NOP)},
+				Catches: []compile.Catch{{PC0: 0, PC1: 1, StartPC: 3}},
+			},
+		}, "invalid catch.pc1 address"},
+
+		{"invalid catch.startpc", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code:    []byte{byte(compile.JMP), '\xff', '\x00', '\x00', '\x00', byte(compile.NOP)},
+				Catches: []compile.Catch{{PC0: 0, PC1: 5, StartPC: 2}},
+			},
+		}, "invalid catch.startpc address"},
+
+		{"invalid jump", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code: []byte{byte(compile.JMP), '\x02', '\x00', '\x00', '\x00', byte(compile.NOP)},
+			},
+		}, "invalid jump address"},
+
+		{"valid code and catch", compile.Program{
+			Toplevel: &compile.Funcode{
+				Code:    []byte{byte(compile.NOP), byte(compile.JMP), '\x06', '\x00', '\x00', '\x00', byte(compile.NOP)},
+				Catches: []compile.Catch{{PC0: 1, PC1: 6, StartPC: 0}},
+			},
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			_, err := compile.Dasm(&c.p)
+			if c.err == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, c.err)
+		})
+	}
+}

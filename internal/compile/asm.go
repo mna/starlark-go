@@ -442,10 +442,16 @@ func Dasm(p *Program) ([]byte, error) {
 	d := dasm{p: p, buf: new(bytes.Buffer)}
 	d.program()
 	d.write("\n")
-	d.function(p.Toplevel)
-	for _, fn := range p.Functions {
-		d.write("\n")
-		d.function(fn)
+
+	if d.p.Toplevel == nil {
+		d.err = errors.New("missing top-level function")
+	}
+	if d.err == nil {
+		d.function(p.Toplevel)
+		for _, fn := range p.Functions {
+			d.write("\n")
+			d.function(fn)
+		}
 	}
 
 	return d.buf.Bytes(), d.err
@@ -458,6 +464,10 @@ type dasm struct {
 }
 
 func (d *dasm) function(fn *Funcode) {
+	if d.err != nil {
+		return
+	}
+
 	d.writef("function: %s %d %d %d", fn.Name, fn.MaxStack, fn.NumParams, fn.NumKwonlyParams)
 	if fn.HasVarargs {
 		d.write(" +varargs")
@@ -502,7 +512,8 @@ func (d *dasm) function(fn *Funcode) {
 		if op >= OpcodeArgMin {
 			v, n := binary.Uvarint(fn.Code[addr+1:])
 			if n <= 0 || v > math.MaxUint32 {
-				panic(fmt.Sprintf("invalid uvarint argument in function %s code at index %d (%s)", fn.Name, addr, op))
+				d.err = fmt.Errorf("invalid uvarint argument in function %s code at index %d (%s)", fn.Name, addr, op)
+				return
 			}
 			arg = uint32(v)
 
@@ -520,15 +531,31 @@ func (d *dasm) function(fn *Funcode) {
 	if len(fn.Catches) > 0 {
 		d.write("\tcatches:\n")
 		for i, c := range fn.Catches {
+			if c.PC0 >= uint32(len(addrToIndex)) {
+				d.err = fmt.Errorf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i)
+				return
+			}
+			if c.PC1 >= uint32(len(addrToIndex)) {
+				d.err = fmt.Errorf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i)
+				return
+			}
+			if c.StartPC >= uint32(len(addrToIndex)) {
+				d.err = fmt.Errorf("invalid catch.startpc address in function %s, catch %d", fn.Name, i)
+				return
+			}
+
 			pc0, pc1, spc := addrToIndex[c.PC0], addrToIndex[c.PC1], addrToIndex[c.StartPC]
 			if pc0 < 0 {
-				panic(fmt.Sprintf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i))
+				d.err = fmt.Errorf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i)
+				return
 			}
 			if pc1 < 0 {
-				panic(fmt.Sprintf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i))
+				d.err = fmt.Errorf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i)
+				return
 			}
 			if spc < 0 {
-				panic(fmt.Sprintf("invalid catch.startpc address in function %s, catch %d", fn.Name, i))
+				d.err = fmt.Errorf("invalid catch.startpc address in function %s, catch %d", fn.Name, i)
+				return
 			}
 			d.writef("\t\t%03d %03d %03d\t# %03d\n", pc0, pc1, spc, i)
 		}
@@ -540,6 +567,10 @@ func (d *dasm) function(fn *Funcode) {
 			op, arg := insn.op, insn.arg
 			if op >= OpcodeArgMin {
 				if isJump(op) {
+					if addrToIndex[arg] == -1 {
+						d.err = fmt.Errorf("invalid jump address %d in function %s, instruction %d (%s)", arg, fn.Name, i, op)
+						return
+					}
 					arg = uint32(addrToIndex[arg])
 				}
 				d.writef("\t\t%s %03d\t# %03d\n", op, arg, i)
@@ -590,7 +621,8 @@ func (d *dasm) program() {
 			case *big.Int:
 				d.writef("\t\tbigint\t%d\t# %03d\n", c, i)
 			default:
-				panic(fmt.Sprintf("unsupported constant type: %T", c))
+				d.err = fmt.Errorf("unsupported constant type: %T", c)
+				return
 			}
 		}
 	}
