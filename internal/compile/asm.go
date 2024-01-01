@@ -437,5 +437,107 @@ func (a *asm) next() []string {
 
 // Dasm writes a compiled program to its assembler textual format.
 func Dasm(p *Program) ([]byte, error) {
-	panic("unreachable")
+	d := dasm{p: p, buf: new(bytes.Buffer)}
+	d.program()
+	d.write("\n")
+	d.function(p.Toplevel)
+	for _, fn := range p.Functions {
+		d.write("\n")
+		d.function(fn)
+	}
+
+	return d.buf.Bytes(), d.err
+}
+
+type dasm struct {
+	p   *Program
+	buf *bytes.Buffer
+	err error
+}
+
+func (d *dasm) function(fn *Funcode) {
+	d.writef("function: %s %d %d %d", fn.Name, fn.MaxStack, fn.NumParams, fn.NumKwonlyParams)
+	if fn.HasVarargs {
+		d.write(" +varargs")
+	}
+	if fn.HasKwargs {
+		d.write(" +kwargs")
+	}
+	d.write("\n")
+
+	if len(fn.Locals) > 0 {
+		d.write("\tlocals:\n")
+		for i, l := range fn.Locals {
+			d.writef("\t\t%s\t# %03d\n", l.Name, i)
+		}
+	}
+	if len(fn.Cells) > 0 {
+		d.write("\tcells:\n")
+		for i, c := range fn.Cells {
+			d.writef("\t\t%s\t# %03d\n", fn.Locals[c], i)
+		}
+	}
+	if len(fn.Freevars) > 0 {
+		d.write("\tfreevars:\n")
+		for i, f := range fn.Freevars {
+			d.writef("\t\t%s\t# %03d\n", f.Name, i)
+		}
+	}
+}
+
+func (d *dasm) program() {
+	d.write("program:")
+	if d.p.Recursion {
+		d.write(" +recursion")
+	}
+	d.write("\n")
+
+	if len(d.p.Loads) > 0 {
+		d.write("\tloads:\n")
+		for i, l := range d.p.Loads {
+			d.writef("\t\t%s\t# %03d\n", l.Name, i)
+		}
+	}
+	if len(d.p.Names) > 0 {
+		d.write("\tnames:\n")
+		for i, n := range d.p.Names {
+			d.writef("\t\t%s\t# %03d\n", n, i)
+		}
+	}
+	if len(d.p.Globals) > 0 {
+		d.write("\tglobals:\n")
+		for i, g := range d.p.Globals {
+			d.writef("\t\t%s\t# %03d\n", g.Name, i)
+		}
+	}
+	if len(d.p.Constants) > 0 {
+		d.write("\tconstants:\n")
+		for i, c := range d.p.Constants {
+			switch c := c.(type) {
+			case string:
+				d.writef("\t\tstring\t%q\t# %03d\n", c, i)
+			case Bytes:
+				d.writef("\t\tbytes\t%q\t# %03d\n", c, i)
+			case int64:
+				d.writef("\t\tint\t%d\t# %03d\n", c, i)
+			case float64:
+				d.writef("\t\tfloat\t%f\t# %03d\n", c, i)
+			case *big.Int:
+				d.writef("\t\tbigint\t%d\t# %03d\n", c, i)
+			default:
+				panic(fmt.Sprintf("unsupported constant type: %T", c))
+			}
+		}
+	}
+}
+
+func (d *dasm) writef(s string, args ...any) {
+	d.write(fmt.Sprintf(s, args...))
+}
+
+func (d *dasm) write(s string) {
+	if d.err != nil {
+		return
+	}
+	_, d.err = d.buf.WriteString(s)
 }
