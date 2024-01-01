@@ -293,7 +293,8 @@ func TestDasm(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			_, err := compile.Dasm(&c.p)
+			p := c.p
+			_, err := compile.Dasm(&p)
 			if c.err == "" {
 				require.NoError(t, err)
 				return
