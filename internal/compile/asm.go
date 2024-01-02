@@ -153,6 +153,7 @@ func (a *asm) function(fields []string) []string {
 				return fields
 			}
 			catch.StartPC = uint32(indexToAddr[catch.StartPC])
+			a.fn.Catches[i] = catch
 		}
 	}
 

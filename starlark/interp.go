@@ -93,7 +93,7 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	sp := 0
 	var pc uint32
 	var result Value
-	var inFlightErr error
+	var inFlightErr, caughtErr error // always either one or the other set
 	code := f.Code
 loop:
 	for {
@@ -108,6 +108,11 @@ loop:
 		if reason := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&thread.cancelReason))); reason != nil {
 			inFlightErr = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
 			break loop
+		}
+
+		if caughtErr != nil && (pc < fr.catch.PC0 || pc > fr.catch.PC1) {
+			caughtErr = nil
+			fr.catch = nil
 		}
 
 		fr.pc = pc
@@ -658,13 +663,15 @@ loop:
 	}
 
 	if inFlightErr != nil {
-		// TODO(mna): all places where inFlightErr is set are followed by 'break
-		// loop', so this would be the perfect spot to check for a catch block if
-		// the error is catchable (some, like thread cancelled, should not be).
+		// all places where inFlightErr is set are followed by 'break loop', so
+		// this is the perfect spot to check for a catch block if the error is
+		// catchable (some, like thread cancelled, should not be).
 		for i := len(f.Catches) - 1; i >= 0; i-- {
 			c := f.Catches[i]
 			if c.Covers(fr.pc) {
 				// run that catch block
+				caughtErr, inFlightErr = inFlightErr, nil
+				fr.catch = &c
 				pc = c.StartPC
 				goto loop
 			}
