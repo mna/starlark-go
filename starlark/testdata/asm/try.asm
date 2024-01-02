@@ -1,3 +1,5 @@
+### result: None
+
 program:
 	globals:
 		result
