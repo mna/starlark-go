@@ -93,8 +93,13 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	sp := 0
 	var pc uint32
 	var result Value
+	// TODO(mna): if caughtErr is exposed via a built-in (e.g. 'exception()') and
+	// the parser ensures that built-in can only be called in a catch block, then
+	// there's no need to clear the error - it will always be set to the proper
+	// in flight error inside a catch block.
 	var inFlightErr, caughtErr error // always either one or the other set
 	code := f.Code
+	_ = caughtErr
 loop:
 	for {
 		thread.Steps++
@@ -108,14 +113,6 @@ loop:
 		if reason := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&thread.cancelReason))); reason != nil {
 			inFlightErr = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
 			break loop
-		}
-
-		// TODO(mna): this is incorrect, the caught error should clear after the
-		// catch block, but PC0 and PC1 are the protected block. We don't know
-		// where the catch block ends (we could add that info).
-		if caughtErr != nil && (pc < fr.catch.PC0 || pc > fr.catch.PC1) {
-			caughtErr = nil
-			fr.catch = nil
 		}
 
 		fr.pc = pc
@@ -674,7 +671,6 @@ loop:
 			if c.Covers(fr.pc) {
 				// run that catch block
 				caughtErr, inFlightErr = inFlightErr, nil
-				fr.catch = &c
 				pc = c.StartPC
 				goto loop
 			}
