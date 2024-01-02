@@ -110,6 +110,9 @@ loop:
 			break loop
 		}
 
+		// TODO(mna): this is incorrect, the caught error should clear after the
+		// catch block, but PC0 and PC1 are the protected block. We don't know
+		// where the catch block ends (we could add that info).
 		if caughtErr != nil && (pc < fr.catch.PC0 || pc > fr.catch.PC1) {
 			caughtErr = nil
 			fr.catch = nil
