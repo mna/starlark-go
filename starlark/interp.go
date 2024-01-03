@@ -96,7 +96,10 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	// TODO(mna): if caughtErr is exposed via a built-in (e.g. 'exception()') and
 	// the parser ensures that built-in can only be called in a catch block, then
 	// there's no need to clear the error - it will always be set to the proper
-	// in flight error inside a catch block.
+	// in flight error inside a catch block. But the caught error could be
+	// retrieved in arbitrarily-nested function calls from the catch block (or
+	// not), so it needs a solution for that. I think it'd still need to be
+	// cleared, but the check could be done only when that built-in is called.
 	var inFlightErr, caughtErr error // always either one or the other set
 	code := f.Code
 	_ = caughtErr
