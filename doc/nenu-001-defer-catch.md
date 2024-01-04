@@ -45,6 +45,19 @@ There is no compatibility concern until v1.
 
 ## Implementation
 
+There are a number of points that deferred execution blocks (common to both `defer` and `catch`) must address:
+
+* Nested blocks of arbitrary levels (either directly, a `defer` inside a `defer`, or indirecty, a function call in a `defer` that contains a `defer`)
+* Deferred blocks "apply to" or "cover" a number of instructions (all instructions that _follow_ the block, until the end of the containing block)
+* The virtual machine must be able to know that a deferred execution is pending when exiting a block
+* The virtual machine must be able to know where to jump to skip the deferred block (until it is time to execute it) and go to the next instruction to execute
+* The virtual machine must be able to know where a parent block of a deferred execution ends (either by falling through the next instruction outside the block, by jumping outside the block, by returning or by throwing an exception)
+* The virtual machine must be able to know where a deferred block ends, to jump to the next instruction after the end of its parent block (unless the deferred execution throws or returns)
+* The virtual machine only needs to care about deferred blocks in the current function, not about any parent ones - this is because a function is a scope and if there are no deferred blocks in this scope, then there are no deffered blocks to care about - any ones in parent functions will execute after the return of this call.
+* If the deferred block is executed following a raised exception, that exception must be made available to the code in some way. If it was not executed following a raised exception (`defer` blocks only), then accessing that exception must return a nil value.
+
+In addition, those points apply specifically to `catch` statements:
+
 [A description of the steps in the implementation.]
 
 ## Rationale
