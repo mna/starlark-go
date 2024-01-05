@@ -63,6 +63,10 @@ In addition, those points apply specifically to `catch` statements:
 * A `catch` implicitly recovers from an exception, the error must be re-thrown (or a new one thrown) to keep the exception alive.
 * The previous point means that the stack of current catch statements will only ever run the last one. Then if running that block throws, the next catch statement will run, etc.
 
+### Compiler and VM details
+
+* A new opcode, `DEFERPUSH <addr>`, pushes a `defer` block to the stack (its start address, which is the next pc) and jumps to `addr`, which should be the first instruction after the block.
+* Similarly, a new opcode, `CATCHPUSH <addr>`, pushes a `catch` block to the stack and jumps to `addr`.
 
 [A description of the steps in the implementation.]
 
