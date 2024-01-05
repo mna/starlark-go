@@ -49,20 +49,34 @@ There are a number of points that deferred execution blocks (common to both `def
 
 * Nested blocks of arbitrary levels (either directly, a `defer` inside a `defer`, or indirecty, a function call in a `defer` that contains a `defer`)
 * Deferred blocks "apply to" or "cover" a number of instructions (all instructions that _follow_ the block, until the end of the containing block)
-* The virtual machine must be able to know that a deferred execution is pending when exiting a block
-* The virtual machine must be able to know where to jump to skip the deferred block (until it is time to execute it) and go to the next instruction to execute
-* The virtual machine must be able to know where a parent block of a deferred execution ends (either by falling through the next instruction outside the block, by jumping outside the block, by returning or by throwing an exception)
-* The virtual machine must be able to know where a deferred block ends, to jump to the next instruction after the end of its parent block (unless the deferred execution throws or returns)
-* The virtual machine only needs to care about deferred blocks in the current function, not about any parent ones - this is because a function is a scope and if there are no deferred blocks in this scope, then there are no deffered blocks to care about - any ones in parent functions will execute after the return of this call.
-* If the deferred block is executed following a raised exception, that exception must be made available to the code in some way. If it was not executed following a raised exception (`defer` blocks only), then accessing that exception must return a nil value.
+* The virtual machine must know that a deferred execution is pending when exiting a block
+* The virtual machine must know where to jump to skip the deferred block (until it is time to execute it) and go to the next instruction to execute
+* The virtual machine must know where a parent block of a deferred execution ends (either by falling through the next instruction outside the block, by jumping outside the block, by returning or by throwing an exception)
+* The virtual machine must know where a deferred block ends, to jump to the next instruction after the end of its parent block (unless the deferred execution throws or returns)
+* The virtual machine only needs to care about deferred blocks in the current function, not about any parent ones - this is because a function is a scope and if there are no deferred blocks in this scope, then there are no deferred blocks to care about - any ones in parent functions will execute after the return of this call.
+* If the deferred block is executed following a raised exception, that exception must be made available to the code in some way. If it was not executed following a raised exception (`defer` blocks only), then accessing that exception must return a `nil` value.
+* Once the parent block exits, all deferred blocks in that block become dead (after possible eexecution of course).
+* If a deferred block causes an exit from multiple blocks (via a throw or a return), then all deferred blocks in those exited blocks must execute as per the rule.
 
 In addition, those points apply specifically to `catch` statements:
+
+* A `catch` implicitly recovers from an exception, the error must be re-thrown (or a new one thrown) to keep the exception alive.
+* The previous point means that the stack of current catch statements will only ever run the last one. Then if running that block throws, the next catch statement will run, etc.
+
 
 [A description of the steps in the implementation.]
 
 ## Rationale
 
-[A discussion of alternate approaches and the trade offs, advantages, and disadvantages of the specified approach.]
+A number of different approaches have been considered (and even attempted) but rejected. They are presented in the following sub-sections.
+
+### Static storage of catch and defer blocks
+
+A strictly static approach to this problem cannot be efficient - every jump/return opcode would need to check if it is entering such a block, exiting it, and exiting the parent scope. This means looping over those defer/catch blocks (or indexing them in a mapping of address to block, but even then the lookups need to be done constantly). This is a lot of overhead to add to a number of general opcodes, which would undoubtedly lead to slowdowns in performance (not verified).
+
+### Insert deferred instructions in all exit paths
+
+At compile-time, it could theoretically be possible to copy the instructions of the deferred blocks (for `defer`, not viable for `catch`) in all the places that the parent scope can exit. But in practice this doesn't quite work - e.g. how do you insert instructions _after_ a `RETURN`? Plus, as mentioned, this doesn't address the `catch` blocks behaviour, and it would drastically increase the code segment of compiled programs.
 
 ## Open issues (if applicable)
 
