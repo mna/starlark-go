@@ -68,6 +68,20 @@ In addition, those points apply specifically to `catch` statements:
 * A new opcode, `DEFERPUSH <addr>`, pushes a `defer` block to the stack (its start address, which is the next pc) and jumps to `addr`, which should be the first instruction after the block.
 * Similarly, a new opcode, `CATCHPUSH <addr>`, pushes a `catch` block to the stack and jumps to `addr`.
 
+A big issue is determining efficiently when a block is exited (e.g. on each pc change, check if it is outside the range of the addresses of the block).
+
+See https://cs.stackexchange.com/questions/104886/algorithm-data-structure-to-quickly-check-if-an-integer-is-a-member-of-any-lowe. Worth benchmarking if it does add any noticeable slowdown if there are no intervals to check (no defer/catch), ideally that would not add any overhead in that case.
+
+Or would it be possible to actually use static storage of those blocks, and instead of inserting a call on every exit path, use a single opcode to trigger deferred execution? `RETURN` would be the only one to not require it, it would automatically check if there is deferred execution pending?
+
+Think about it - there are 3 jump operations (`JMP`, `ITERJMP` and `CJMP`) and a single "exit all" one (`RETURN`). All other instructions advance to the next address without jumping (so they can only exit by "fallthrough" outside a block). For the jump opcodes, the deferred execution takes place immediately, _before_ jumping to the destination. For the return opcode, the returned value must be popped and stored temporarily, then execution takes place, and then the return (exit of function) is done. For the fallthrough scenario, the destination address is the current address (i.e. execution must return here after deferred execution).
+
+We could add a single `RUNDEFER` opcode before those 4 operations when there is at least one deferred block pending. It sets a flag that is valid for only the next instruction, which must be one of those 4, and indicates that deferred execution procedure is to be applied. It could take an argument indicating if it is a fallthrough (in which case it behaves as if it was followed by a `JMP <pc>`, and deferred execution runs immediately on the `RUNDEFER` opcode, or it takes no argument and is compiled with a subsequent `JMP <next>`). Those opcodes can then pop the deferred blocks and run them as required. This takes care - efficiently - of when to run the deferred blocks. Now we need a way to know when the deferred block exits.
+
+A deferred block can only exit via a fallthrough or a `RETURN` (no explicit jumps outside the block). In particular, it could not do a deferred `break` or `continue` inside a loop, nor a `goto` outside itself. If it contains a `RETURN`, it should be preceded by a `RUNDEFER` if there are pending deferred blocks, just like in non-deferred blocks. Because there can be only one returned value, a `RETURN` in a `defer` overrides any pending `RETURN`, so there's no need to keep a stack of those, only a single state value is required. Return addresses (where to go to after executing deferred blocks), on the other hand, need a stack, because executing a defer can cause execution of other (nested) defers, inside the `defer`, which would also require a destination address to be save.
+
+For the fallthrough behaviour, a `DEFERJMP` instruction indicates to jump to the last saved destination address in the case of a `defer` (or to return if triggered via a `RETURN`), or to jump to the address following its parent scope exit (which is the argument address always encoded with this opcode, and is required for a `catch`). Before doing so, it checks if there are any more deferred blocks to run (there could be many such blocks, the check for this is done using the source+destination address of what triggered deferred execution - any deferred blocks that were covering the source but not the destination must be executed).
+
 [A description of the steps in the implementation.]
 
 ## Rationale
