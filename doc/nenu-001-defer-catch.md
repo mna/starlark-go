@@ -80,7 +80,7 @@ Additional static-time information to collect during compilation:
 	- Start address of the `catch`
 	- Start and end addresses of the covered instructions
 
-* If there's an efficient way to persist an interval tree? If so, build it and persist it in the binary, otherwise build it at decode time.
+* If there's an efficient way to persist an [interval tree](https://en.m.wikipedia.org/wiki/Interval_tree), build it and persist it in the binary, otherwise build it at decode time.
 
 Additional opcodes:
 
@@ -91,11 +91,16 @@ Additional opcodes:
 
 * `DEFEREXIT`, an opcode that must be present at every exit point of a `defer` block (not `catch` blocks).
 	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
+	- In other words, `DEFEREXIT` implies a `RUNDEFER` followed by a jump to the return-to value.
 	- Otherwise, if there are no more deferred blocks to run, it pops the latest saved return-to value (which may be a value to return or an address to jump to).
 
-* `CATCHJMP <addr>`, an opcode similar to `DEFERJMP` that must be present at every exit point of a `catch` block (not `defer` blocks).
+* `CATCHJMP <addr>`, an opcode similar to `DEFEREXIT` that must be present at every exit point of a `catch` block (not `defer` blocks).
 	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
 	- Otherwise, if there are no more deferred blocks to run, it jumps to the address that is the argument of the opcode and must be the first instruction following the block containing the `catch` block (the instruction that follows the last instruction covered by the `catch`).
+	- If `addr` is `0`, then it does not jump, but instead returns from the function with a `nil` value.
+	- Need to think properly about how to handle/unroll the deferred stack.
+
+An important thing to note is that a `defer` block covers all instructions until the end of the containing block. This includes any implicit `return nil` for the body of a function with no explicit return value.
 
 The next sub-sections will explore the behaviour of the VM under some scenarios.
 
@@ -141,13 +146,123 @@ With the following behaviour:
 	- if it finds any, it executes it
 	- in this scenario, there is no other `defer` block so it pops from the stored "deferred action" stack and returns the stored to-be-returned value.
 
-#### Nested defer
+#### Nested defers
+
+This source code:
+
+```
+fn ()
+	defer      # 1
+		defer  # 2
+			A  # 3
+		end    # 4
+		B      # 5
+	end        # 6
+	C          # 7
+end
+```
+
+Compiles to this bytecode:
+
+```
+JMP 7
+	JMP 5
+		INST A
+		DEFEREXIT
+	INST B
+	DEFEREXIT
+INST C
+NONE
+RUNDEFER
+RETURN
+```
+
+With the following behaviour:
+
+* Execution starts with instruction C, jumping over the deferred block.
+* Before the fallthrough (implicit) `return nil`, the outermost defer is executed as it covers the `RETURN` instruction.
+* Instruction B is executed, and on `DEFEREXIT` it looks for any deferred blocks that covers the `DEFEREXIT` but not the destination (and since the destination is a `RETURN`, no block covers it).
+* It finds the nested `defer` and executes instruction A, and repeats the logic on its `DEFEREXIT`, finding no other deferred block, so it returns the pending return value.
+
+#### Multiple defers
+
+This source code:
+
+```
+fn ()
+	defer  # 1
+		A  # 2
+	end    # 3
+	defer  # 4
+		B  # 5
+	end    # 6
+	C      # 7
+end
+```
+
+Compiles to this bytecode:
+
+```
+JMP 4
+	INST A
+	DEFEREXIT
+JMP 7
+	INST B
+	DEFEREXIT
+INST C
+NONE
+RUNDEFER
+RETURN
+```
+
+With the following behaviour:
+
+* As usual, a `defer` block is preceded by a `JMP` over it (to the instruction that follows the `defer` block).
+* It starts executing instruction C, then at the `RETURN` flagged with `RUNDEFER` it looks for the nearmost `defer` that covers the `RETURN`, storing the to-be-returned value on the deferred stack.
+* It executes instruction B, and on `DEFEREXIT` repeats the process of looking at the nearest `defer` that covers it and finds one.
+* It executes instruction A and on `DEFEREXIT` again looks for a `defer` that covers it, doesn't find any, and pops from the deferred stack and returns the value.
 
 #### Simple catch
 
+This source code:
+
+```
+fn ()
+	catch  # 1
+		A  # 2
+	end    # 3
+	B      # 4
+end
+```
+
+Compiles to this bytecode:
+
+```
+JMP 4
+	INST A
+	CATCHJMP 0
+INST B
+NONE
+RETURN
+```
+
+With the following behaviour:
+
+* As for `defer` blocks, a `JMP` jumps over the `catch` block.
+* It starts executing instruction B.
+* There is no `RUNDEFER` because there is no pending `defer` block, a `catch` only runs on error so if there's no error with instruction B, execution continues normally with no special behaviour for the `catch`.
+* If instruction B throws an error, the VM looks for the nearest `catch` block and jumps to it if it finds one, otherwise it returns the error to the caller.
+* If it finds one - as in this scenario -, it runs instruction A and on `CATCHJMP`:
+	- if there are any `defer` blocks to run, it runs the nearest one (pushing the target address or return value on the deferred stack), and then processing resumes as if it was a standard deferred execution;
+	- otherwise it jumps to the provided address or - as in this case - returns `nil` if it's a function's top-level `catch` statement (i.e. there are no more instructions to jump to after the ones covered by the `catch`).
+
+#### Simple catch with re-throw
+
 #### Catch with defer
 
-#### Nested catch with re-throw
+#### Nested catches with re-throw
+
+#### Multiple catches with re-throw
 
 ## Rationale
 
