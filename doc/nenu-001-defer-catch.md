@@ -97,21 +97,57 @@ Additional opcodes:
 	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
 	- Otherwise, if there are no more deferred blocks to run, it jumps to the address that is the argument of the opcode and must be the first instruction following the block containing the `catch` block (the instruction that follows the last instruction covered by the `catch`).
 
-#### Scratchpad of ideas
+The next sub-sections will explore the behaviour of the VM under some scenarios.
 
-See https://cs.stackexchange.com/questions/104886/algorithm-data-structure-to-quickly-check-if-an-integer-is-a-member-of-any-lowe. Worth benchmarking if it does add any noticeable slowdown if there are no intervals to check (no defer/catch), ideally that would not add any overhead in that case.
+#### Simple defer
 
-Or would it be possible to actually use static storage of those blocks, and instead of inserting a call on every exit path, use a single opcode to trigger deferred execution? `RETURN` would be the only one to not require it, it would automatically check if there is deferred execution pending?
+This source code:
 
-Think about it - there are 3 jump operations (`JMP`, `ITERJMP` and `CJMP`) and a single "exit all" one (`RETURN`). All other instructions advance to the next address without jumping (so they can only exit by "fallthrough" outside a block). For the jump opcodes, the deferred execution takes place immediately, _before_ jumping to the destination. For the return opcode, the returned value must be popped and stored temporarily, then execution takes place, and then the return (exit of function) is done. For the fallthrough scenario, the destination address is the current address (i.e. execution must return here after deferred execution).
+```
+fn ()
+	defer # 1
+		A # 2
+	end   # 3
+	B     # 4
+end
+```
 
-We could add a single `RUNDEFER` opcode before those 4 operations when there is at least one deferred block pending when jumping to the destination address (or returning). This means looking to more than just the current block's presence of `defer`s or not (i.e. a `RETURN` requires a `RUNDEFER` if there's any in scope for the whole function, while jumps can exit multiple blocks). It sets a flag that is valid for only the next instruction, which must be one of those 4, and indicates that deferred execution procedure is to be applied. It could take an argument indicating if it is a fallthrough (in which case it behaves as if it was followed by a `JMP <pc>`, and deferred execution runs immediately on the `RUNDEFER` opcode, or it takes no argument and is compiled with a subsequent `JMP <next>`). Those opcodes can then pop the deferred blocks and run them as required. This takes care - efficiently - of when to run the deferred blocks. Now we need a way to know when the deferred block exits.
+Compiles to this bytecode:
 
-A deferred block can only exit via a fallthrough or a `RETURN` (no explicit jumps outside the block). In particular, it could not do a deferred `break` or `continue` inside a loop, nor a `goto` outside itself. If it contains a `RETURN`, it should be preceded by a `RUNDEFER` if there are pending deferred blocks, just like in non-deferred blocks. Because there can be only one returned value, a `RETURN` in a `defer` overrides any pending `RETURN`, so there's no need to keep a stack of those, only a single state value is required. Return addresses (where to go to after executing deferred blocks), on the other hand, need a stack, because executing a defer can cause execution of other (nested) defers, inside the `defer`, which would also require a destination address to be saved.
+```
+JMP 4
+INST A
+DEFEREXIT
+INST B
+NONE
+RUNDEFER
+RETURN
+```
 
-For the fallthrough behaviour, a `DEFERJMP` instruction indicates to jump to the last saved destination address in the case of a `defer` (or to return if triggered via a `RETURN` - but those could be mingled with jump destination addresses to process before returning - I think it might be best to prevent `RETURN` in a `defer` for now, just allow them in a `catch`? or same problem (`defer` inside `catch`)?), or to jump to the address following its parent scope exit (which is the argument address always encoded with this opcode, and is required for a `catch`). Before doing so, it checks if there are any more deferred blocks to run (there could be many such blocks, the check for this is done using the source+destination address of what triggered deferred execution - any deferred blocks that were covering the source but not the destination must be executed).
+With the following behaviour:
 
-[A description of the steps in the implementation.]
+* The `defer` block is compiled with a `JMP` over it so that it does not run immediately.
+* The VM runs instruction B, and since this function does not explicitly return anything, it is compiled with the equivalent of `return nil`.
+* Because there is a pending `defer` block, the `return` opcode is preceded by a `RUNDEFER`.
+* When `RETURN` is executed, it has the `RUNDEFER` flag set, so:
+	- it pops and stores the to-be-returned value
+	- it looks for the nearest `defer` block that:
+		- covers the current `pc` address (the `RETURN` instruction) and
+		- does not cover the destination `pc` address (in the case of a `RETURN`, no `defer` block ever covers the destination).
+	- if it finds any, it executes it, otherwise it proceeds with the `RETURN` of the value.
+* In this scenario, it finds the `defer` block and jumps to `INST A` and starts executing from this instruction.
+* When it encounters `DEFEREXIT`, it:
+	- looks for the nearest `defer` block with the same criteria (covers the `DEFEREXIT` address, does not cover the target destination address - in this case a to-be-returned value so no block ever covers it)
+	- if it finds any, it executes it
+	- in this scenario, there is no other `defer` block so it pops from the stored "deferred action" stack and returns the stored to-be-returned value.
+
+#### Nested defer
+
+#### Simple catch
+
+#### Catch with defer
+
+#### Nested catch with re-throw
 
 ## Rationale
 
@@ -119,7 +155,7 @@ A number of different approaches have been considered (and even attempted) but r
 
 ### Static storage of catch and defer blocks
 
-A strictly static approach to this problem cannot be efficient - every jump/return opcode would need to check if it is entering such a block, exiting it, and exiting the parent scope. This means looping over those defer/catch blocks (or indexing them in a mapping of address to block, but even then the lookups need to be done constantly). This is a lot of overhead to add to a number of general opcodes, which would undoubtedly lead to slowdowns in performance (not verified).
+A strictly static approach (without any new opcode) to this problem cannot be efficient - every jump/return opcode would need to check if it is entering such a block, exiting it, and exiting the parent scope. This means looping over those defer/catch blocks (or indexing them in a mapping of address to block, but even then the lookups need to be done constantly). This is a lot of overhead to add to a number of general opcodes, which would undoubtedly lead to slowdowns in performance (not verified).
 
 ### Insert deferred instructions in all exit paths
 
