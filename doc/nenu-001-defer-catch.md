@@ -70,12 +70,34 @@ In addition, those points apply specifically to `catch` statements:
 
 ### Compiler and VM details
 
+Additional static-time information to collect during compilation:
+
+* List of `defer` blocks:
+	- Start address of the `defer`
+	- Start and end addresses of the covered instructions
+
+* List of `catch` blocks:
+	- Start address of the `catch`
+	- Start and end addresses of the covered instructions
+
+* If there's an efficient way to persist an interval tree? If so, build it and persist it in the binary, otherwise build it at decode time.
+
+Additional opcodes:
+
+* `RUNDEFER`, an opcode that _must_ be followed by `JMP`, `ITERJMP`, `CJMP` or `RETURN`.
+	- Should be used only if the next instruction causes execution of a `defer` block, but this is an optimization (i.e. it would not cause the program to fail if there is no `defer` to run).
+	- Triggers execution of any pending `defer` blocks, recording the destination address (or return value) until all deferred blocks have run.
+	- If the block exits naturally (a "fallthrough" to the next instruction that follows the block), a `JMP <pc>` instruction must be added so that the requirement that a `RUNDEFER` is always followed by such an instruction is met.
+
+* `DEFEREXIT`, an opcode that must be present at every exit point of a `defer` block (not `catch` blocks).
+	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
+	- Otherwise, if there are no more deferred blocks to run, it pops the latest saved return-to value (which may be a value to return or an address to jump to).
+
+* `CATCHJMP <addr>`, an opcode similar to `DEFERJMP` that must be present at every exit point of a `catch` block (not `defer` blocks).
+	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
+	- Otherwise, if there are no more deferred blocks to run, it jumps to the address that is the argument of the opcode and must be the first instruction following the block containing the `catch` block (the instruction that follows the last instruction covered by the `catch`).
+
 #### Scratchpad of ideas
-
-* A new opcode, `DEFERPUSH <addr>`, pushes a `defer` block to the stack (its start address, which is the next pc) and jumps to `addr`, which should be the first instruction after the block.
-* Similarly, a new opcode, `CATCHPUSH <addr>`, pushes a `catch` block to the stack and jumps to `addr`.
-
-A big issue is determining efficiently when a block is exited (e.g. on each pc change, check if it is outside the range of the addresses of the block).
 
 See https://cs.stackexchange.com/questions/104886/algorithm-data-structure-to-quickly-check-if-an-integer-is-a-member-of-any-lowe. Worth benchmarking if it does add any noticeable slowdown if there are no intervals to check (no defer/catch), ideally that would not add any overhead in that case.
 
