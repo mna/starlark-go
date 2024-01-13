@@ -86,6 +86,7 @@ Additional opcodes:
 
 * `RUNDEFER`, an opcode that _must_ be followed by `JMP`, `ITERJMP`, `CJMP` or `RETURN`.
 	- Should be used only if the next instruction causes execution of a `defer` block, but this is an optimization (i.e. it would not cause the program to fail if there is no `defer` to run).
+	- Technically, this means that it must be added if the next instruction is covered by a `defer`, but the target of that instruction is not (and a `RETURN` is never a covered target).
 	- Triggers execution of any pending `defer` blocks, recording the destination address (or return value) until all deferred blocks have run.
 	- If the block exits naturally (a "fallthrough" to the next instruction that follows the block), a `JMP <pc>` instruction must be added so that the requirement that a `RUNDEFER` is always followed by such an instruction is met.
 
@@ -256,9 +257,50 @@ With the following behaviour:
 	- if there are any `defer` blocks to run, it runs the nearest one (pushing the target address or return value on the deferred stack), and then processing resumes as if it was a standard deferred execution;
 	- otherwise it jumps to the provided address or - as in this case - returns `nil` if it's a function's top-level `catch` statement (i.e. there are no more instructions to jump to after the ones covered by the `catch`).
 
-#### Simple catch with re-throw
+#### Catch with re-throw and defers
 
-#### Catch with defer
+This source code:
+
+```
+fn ()
+	defer 			# 1
+		A           # 2
+	end             # 3
+	catch           # 4
+		B           # 5
+		rethrow     # 6
+	end             # 7
+	defer           # 8
+		C           # 9
+	end             # 10
+	D               # 11
+end
+```
+
+Compiles to this bytecode:
+
+```
+JMP 4
+	INST A
+	DEFEREXIT
+JMP 8
+	INST B
+	THROW
+JMP 11
+	INST C
+	DEFEREXIT
+INST D
+NONE
+RUNDEFER
+RETURN
+```
+
+With the following behaviour:
+
+* Execution starts with instruction D, as per the jumps over deferred blocks.
+* If instruction D succeeds, the `RETURN` flagged with `RUNDEFER` pushes the return value to the deferred stack and causes execution of instruction C, then `DEFEREXIT` causes execution of instruction A, and finally its `DEFEREXIT` pops the return value and returns it.
+* If instruction D fails, it pushes the error on the deferred stack and runs instruction C (nearest defer block), then on `DEFEREXIT` it looks for other deferred blocks and runs the `catch` block - instruction B - which pops the error from the stack (it is handled), but the re-throw re-pushes it to the stack and the nearest `defer` block is identified and instruction A is run, and on its `DEFEREXIT` the error is popped from the stack (no more deferred block to run) and is returned.
+* If instead the `catch` block had not re-thrown, it would've ended with `CATCHJMP` and the address would've been pushed to the deferred stack, and then the top-most `defer` block with instruction A would've run and on `DEFEREXIT` would've resumed at the catch-jump address (which in this case would've been `0` so `return nil`).
 
 #### Nested catches with re-throw
 
