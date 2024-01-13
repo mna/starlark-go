@@ -84,22 +84,42 @@ Additional static-time information to collect during compilation:
 
 Additional opcodes:
 
-* `RUNDEFER`, an opcode that _must_ be followed by `JMP`, `ITERJMP`, `CJMP` or `RETURN`.
+* `RUNDEFER`, an argument-less opcode that _must_ be followed by `JMP`, `ITERJMP`, `CJMP` or `RETURN`.
 	- Should be used only if the next instruction causes execution of a `defer` block, but this is an optimization (i.e. it would not cause the program to fail if there is no `defer` to run).
 	- Technically, this means that it must be added if the next instruction is covered by a `defer`, but the target of that instruction is not (and a `RETURN` is never a covered target).
 	- Triggers execution of any pending `defer` blocks, recording the destination address (or return value) until all deferred blocks have run.
 	- If the block exits naturally (a "fallthrough" to the next instruction that follows the block), a `JMP <pc>` instruction must be added so that the requirement that a `RUNDEFER` is always followed by such an instruction is met.
 
-* `DEFEREXIT`, an opcode that must be present at every exit point of a `defer` block (not `catch` blocks).
-	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
+* `DEFEREXIT`, an argument-less opcode that must be present at every exit point of a `defer` block (not `catch` blocks).
+	- It doesn't stop execution of deferred blocks, if any other are due to run (because they cover the `DEFEREXIT` instruction but not the target address as stored in the deferred stack - a to-be-returned value or to-be-raised error is never covered), they are run.
 	- In other words, `DEFEREXIT` implies a `RUNDEFER` followed by a jump to the return-to value.
-	- Otherwise, if there are no more deferred blocks to run, it pops the latest saved return-to value (which may be a value to return or an address to jump to).
+	- Otherwise, if there are no more deferred blocks to run, it pops the latest saved return-to value (which may be a value to return, an error to raise or an address to jump to).
 
-* `CATCHJMP <addr>`, an opcode similar to `DEFEREXIT` that must be present at every exit point of a `catch` block (not `defer` blocks).
-	- It doesn't stop execution of deferred blocks, if any other are due to run, they are run.
+* `CATCHJMP <addr>`, an opcode with an argument similar to `DEFEREXIT` that must be present at every exit point of a `catch` block (not `defer` blocks).
+	- It doesn't stop execution of deferred blocks, if any other are due to run (because they cover the `CATCHJMP` instruction but not the target address), they are run. In this case, the `CATCHJMP` address is pushed to the deferred stack.
 	- Otherwise, if there are no more deferred blocks to run, it jumps to the address that is the argument of the opcode and must be the first instruction following the block containing the `catch` block (the instruction that follows the last instruction covered by the `catch`).
-	- If `addr` is `0`, then it does not jump, but instead returns from the function with a `nil` value.
+	- If `addr` is `0`, then it does not jump, but instead it returns from the function with a `nil` value. This is for when the `catch` is in the top-level function scope, there is no subsequent instruction to jump to.
 	- Need to think properly about how to handle/unroll the deferred stack.
+
+Additional runtime information to dynamically manage:
+
+* The _deferred stack_, which may hold either of those types:
+	- a `Value` (the value to return from the function after deferred blocks execution)
+	- the address of an instruction (where to jump to after deferred blocks execution)
+	- an `error` that was thrown (the error to return from the function after deferred blocks execution)
+* The `RUNDEFER` opcode causes the next instruction to push to that stack if there are deferred blocks to run
+	- if the next instruction is a `RETURN`, it pops the to-be-returned value from the operands stack and pushes it to the deferred stack
+	- otherwise the target address of the jump is pushed to the deferred stack
+* The `CATCHJMP` opcode also pushes to that stack if there are deferred blocks to run
+	- the target address of the jump is pushed to the deferred stack
+	- as a special case, if that address is `0`, it pushes `nil` as a to-be-returned value to the deferred stack
+* When an error is thrown, it gets pushed to that deferred stack
+	- TODO: review that logic, not obvious how to get the in-flight error and how to clear it on a catch
+	- as it runs deferred execution, the "live" error in-flight is the first error present in the stack (and not overridden by a return value)
+	- when it runs a `catch` block, it gets popped out but must still be available to be retrieved.
+* On `DEFEREXIT`, if there are no more deferred blocks to run, it pops from the deferred stack and executes the corresponding action (return, jump or throw).
+
+Note that a `RETURN` inside a `catch` block does not need anything special outside of those new opcodes - if the `catch` is covered by a `defer`, there will be a `RUNDEFER` before the `RETURN`, and the rest of the behaviour is standard deferred return logic (push returned value to deferred stack, run deferred blocks, ultimately pop and return the value).
 
 An important thing to note is that a `defer` block covers all instructions until the end of the containing block. This includes any implicit `return nil` for the body of a function with no explicit return value.
 
@@ -136,7 +156,7 @@ With the following behaviour:
 * The VM runs instruction B, and since this function does not explicitly return anything, it is compiled with the equivalent of `return nil`.
 * Because there is a pending `defer` block, the `return` opcode is preceded by a `RUNDEFER`.
 * When `RETURN` is executed, it has the `RUNDEFER` flag set, so:
-	- it pops and stores the to-be-returned value
+	- it pops and stores the to-be-returned value from the operands stack
 	- it looks for the nearest `defer` block that:
 		- covers the current `pc` address (the `RETURN` instruction) and
 		- does not cover the destination `pc` address (in the case of a `RETURN`, no `defer` block ever covers the destination).
