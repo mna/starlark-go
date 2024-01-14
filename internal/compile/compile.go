@@ -359,7 +359,8 @@ type Funcode struct {
 	Locals                []Binding       // locals, parameters first
 	Cells                 []int           // indices of Locals that require cells
 	Freevars              []Binding       // for tracing
-	Catches               []Catch         // catch blocks, nested ones must come after the more general ones
+	Defers                []Defer         // defer blocks, nested ones must come after the more general ones
+	Catches               []Defer         // catch blocks, nested ones must come after the more general ones
 	MaxStack              int
 	NumParams             int
 	NumKwonlyParams       int
@@ -382,18 +383,18 @@ type Binding struct {
 	Pos  syntax.Position
 }
 
-// Catch is a catch block that runs if any error is raised by the instructions
-// that it covers. Emitted code for a catch block must ensure that there is a
-// JMP over the catch block (to PC0), that StartPC is the pc after that JMP,
-// and that the catch block does not fall through to the protected block - it
-// must end with a RETURN or JMP beyond PC1 or a CALL to a function that always
-// throws an error (a "rethrow"), etc.
-type Catch struct {
+// Defer is a defer or catch block that runs if any error is raised by the
+// instructions that it covers. Emitted code for a defer block must ensure that
+// there is a JMP over the defer block (to PC0), that StartPC is the pc after
+// that JMP, and that the defer block does not fall through to the protected
+// block - it must end with a DEFEREXIT or CATCHJMP beyond PC1 or a CALL to a
+// function that always throws an error (a "rethrow"), etc.
+type Defer struct {
 	PC0, PC1 uint32 // start and end of protected instructions (inclusive), precondition: PC0 <= PC1
-	StartPC  uint32 // start of the catch instructions
+	StartPC  uint32 // start of the defer/catch instructions
 }
 
-func (c Catch) Covers(pc uint32) bool {
+func (c Defer) Covers(pc uint32) bool {
 	return c.PC0 <= pc && pc <= c.PC1
 }
 

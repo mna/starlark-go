@@ -270,21 +270,21 @@ func TestDasm(t *testing.T) {
 		{"invalid catch.pc0", compile.Program{
 			Toplevel: &compile.Funcode{
 				Code:    []byte{byte(compile.NOP), byte(compile.NOP)},
-				Catches: []compile.Catch{{PC0: 2, PC1: 3, StartPC: 0}},
+				Catches: []compile.Defer{{PC0: 2, PC1: 3, StartPC: 0}},
 			},
 		}, "invalid catch.pc0 address"},
 
 		{"invalid catch.pc1", compile.Program{
 			Toplevel: &compile.Funcode{
 				Code:    []byte{byte(compile.JMP), '\xff', '\x00', byte(compile.NOP)},
-				Catches: []compile.Catch{{PC0: 0, PC1: 1, StartPC: 3}},
+				Catches: []compile.Defer{{PC0: 0, PC1: 1, StartPC: 3}},
 			},
 		}, "invalid catch.pc1 address"},
 
 		{"invalid catch.startpc", compile.Program{
 			Toplevel: &compile.Funcode{
 				Code:    []byte{byte(compile.JMP), '\xff', '\x00', '\x00', '\x00', byte(compile.NOP)},
-				Catches: []compile.Catch{{PC0: 0, PC1: 5, StartPC: 2}},
+				Catches: []compile.Defer{{PC0: 0, PC1: 5, StartPC: 2}},
 			},
 		}, "invalid catch.startpc address"},
 
@@ -297,7 +297,7 @@ func TestDasm(t *testing.T) {
 		{"valid code and catch", compile.Program{
 			Toplevel: &compile.Funcode{
 				Code:    []byte{byte(compile.NOP), byte(compile.JMP), '\x06', '\x00', '\x00', '\x00', byte(compile.NOP)},
-				Catches: []compile.Catch{{PC0: 1, PC1: 6, StartPC: 0}},
+				Catches: []compile.Defer{{PC0: 1, PC1: 6, StartPC: 0}},
 			},
 		}, ""},
 	}

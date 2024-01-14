@@ -107,16 +107,17 @@ Additional runtime information to dynamically manage:
 	- a `Value` (the value to return from the function after deferred blocks execution)
 	- the address of an instruction (where to jump to after deferred blocks execution)
 	- an `error` that was thrown (the error to return from the function after deferred blocks execution)
+	- or it could be just a `[]int64` where `-1` indicates to return the current pending value or the in-flight error
 * The `RUNDEFER` opcode causes the next instruction to push to that stack if there are deferred blocks to run
 	- if the next instruction is a `RETURN`, it pops the to-be-returned value from the operands stack and pushes it to the deferred stack
 	- otherwise the target address of the jump is pushed to the deferred stack
 * The `CATCHJMP` opcode also pushes to that stack if there are deferred blocks to run
 	- the target address of the jump is pushed to the deferred stack
 	- as a special case, if that address is `0`, it pushes `nil` as a to-be-returned value to the deferred stack
-* When an error is thrown, it gets pushed to that deferred stack
-	- TODO: review that logic, not obvious how to get the in-flight error and how to clear it on a catch
-	- as it runs deferred execution, the "live" error in-flight is the first error present in the stack (and not overridden by a return value)
-	- when it runs a `catch` block, it gets popped out but must still be available to be retrieved.
+* When an error is thrown, it gets stored as in-flight
+	- as it runs deferred execution, the in-flight error is available to the code (maybe via a built-in function)
+	- when it runs a `catch` block, it is still available as the in-flight error until the catch block exits (in which case the error is considered recovered from, unless it exits by raising an error again)
+	- the in-flight error is cleared on `CATCHJMP` or on `RETURN` inside a `catch` - so wherever the `catch` block exits, the error gets cleared
 * On `DEFEREXIT`, if there are no more deferred blocks to run, it pops from the deferred stack and executes the corresponding action (return, jump or throw).
 
 Note that a `RETURN` inside a `catch` block does not need anything special outside of those new opcodes - if the `catch` is covered by a `defer`, there will be a `RUNDEFER` before the `RETURN`, and the rest of the behaviour is standard deferred return logic (push returned value to deferred stack, run deferred blocks, ultimately pop and return the value).
@@ -323,6 +324,31 @@ With the following behaviour:
 * If instead the `catch` block had not re-thrown, it would've ended with `CATCHJMP` and the address would've been pushed to the deferred stack, and then the top-most `defer` block with instruction A would've run and on `DEFEREXIT` would've resumed at the catch-jump address (which in this case would've been `0` so `return nil`).
 
 #### Nested catches with re-throw
+
+This source code:
+
+```
+fn ()
+	defer 			# 1
+		A           # 2
+	end             # 3
+	catch           # 4
+		catch       # 5
+			B       # 6
+		end         # 7
+		C           # 8
+		rethrow     # 9
+	end             # 10
+	D               # 11
+end
+```
+
+Compiles to this bytecode:
+
+```
+```
+
+With the following behaviour:
 
 #### Multiple catches with re-throw
 

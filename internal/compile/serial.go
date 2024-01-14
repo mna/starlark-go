@@ -40,7 +40,8 @@ package compile
 //	cells		[]int
 //	numfreevars	varint
 //	freevar		[]Ident
-//  catches   []Catch
+//  defers    []Defer
+//  catches   []Defer
 //	maxstack	varint
 //	numparams	varint
 //	numkwonlyparams	varint
@@ -191,13 +192,13 @@ func (e *encoder) bindings(binds []Binding) {
 	}
 }
 
-func (e *encoder) catch(catch Catch) {
+func (e *encoder) catch(catch Defer) {
 	e.uint32(catch.PC0)
 	e.uint32(catch.PC1)
 	e.uint32(catch.StartPC)
 }
 
-func (e *encoder) catches(catches []Catch) {
+func (e *encoder) catches(catches []Defer) {
 	e.int(len(catches))
 	for _, catch := range catches {
 		e.catch(catch)
@@ -376,15 +377,15 @@ func (d *decoder) bindings() []Binding {
 	return bindings
 }
 
-func (d *decoder) catch() Catch {
+func (d *decoder) catch() Defer {
 	pc0 := uint32(d.uint64())
 	pc1 := uint32(d.uint64())
 	spc := uint32(d.uint64())
-	return Catch{PC0: pc0, PC1: pc1, StartPC: spc}
+	return Defer{PC0: pc0, PC1: pc1, StartPC: spc}
 }
 
-func (d *decoder) catches() []Catch {
-	catches := make([]Catch, d.int())
+func (d *decoder) catches() []Defer {
+	catches := make([]Defer, d.int())
 	for i := range catches {
 		catches[i] = d.catch()
 	}

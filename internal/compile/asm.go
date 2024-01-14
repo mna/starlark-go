@@ -44,6 +44,8 @@ import (
 // 			x
 // 		freevars:                          # optional, list of Freevars
 // 			y
+// 		defers:                            # optional, list of Defer blocks
+// 			10 20 5                          # index of pc0-pc1 and startpc in code section (will be translated to pc address)
 // 		catches:                           # optional, list of Catch blocks
 // 			10 20 5                          # index of pc0-pc1 and startpc in code section (will be translated to pc address)
 // 		code:                              # required, list of instructions
@@ -61,6 +63,7 @@ var sections = map[string]bool{
 	"locals:":    true,
 	"cells:":     true,
 	"freevars:":  true,
+	"defers:":    true,
 	"catches:":   true,
 	"code:":      true,
 }
@@ -130,30 +133,19 @@ func (a *asm) function(fields []string) []string {
 	fields = a.locals(fields)
 	fields = a.cells(fields)
 	fields = a.freevars(fields)
+	fields = a.defers(fields)
 	fields = a.catches(fields)
 	fields, indexToAddr := a.code(fields)
 
 	if a.err == nil {
-		// resolve the catch addresses
-		for i, catch := range a.fn.Catches {
-			if catch.PC0 >= uint32(len(indexToAddr)) {
-				a.err = fmt.Errorf("invalid PC0 index %d: catch at index %d", catch.PC0, i)
-				return fields
-			}
-			catch.PC0 = uint32(indexToAddr[catch.PC0])
-
-			if catch.PC1 >= uint32(len(indexToAddr)) {
-				a.err = fmt.Errorf("invalid PC1 index %d: catch at index %d", catch.PC1, i)
-				return fields
-			}
-			catch.PC1 = uint32(indexToAddr[catch.PC1])
-
-			if catch.StartPC >= uint32(len(indexToAddr)) {
-				a.err = fmt.Errorf("invalid StartPC index %d: catch at index %d", catch.StartPC, i)
-				return fields
-			}
-			catch.StartPC = uint32(indexToAddr[catch.StartPC])
-			a.fn.Catches[i] = catch
+		// resolve the defer and catch addresses
+		if err := resolveDefers(indexToAddr, a.fn.Defers, "defer"); err != nil {
+			a.err = err
+			return fields
+		}
+		if err := resolveDefers(indexToAddr, a.fn.Catches, "catch"); err != nil {
+			a.err = err
+			return fields
 		}
 	}
 
@@ -164,6 +156,27 @@ func (a *asm) function(fields []string) []string {
 		a.p.Functions = append(a.p.Functions, &fn)
 	}
 	return fields
+}
+
+func resolveDefers(indexToAddr []int, defers []Defer, label string) error {
+	for i, d := range defers {
+		if d.PC0 >= uint32(len(indexToAddr)) {
+			return fmt.Errorf("invalid PC0 index %d: %s at index %d", d.PC0, label, i)
+		}
+		d.PC0 = uint32(indexToAddr[d.PC0])
+
+		if d.PC1 >= uint32(len(indexToAddr)) {
+			return fmt.Errorf("invalid PC1 index %d: %s at index %d", d.PC1, label, i)
+		}
+		d.PC1 = uint32(indexToAddr[d.PC1])
+
+		if d.StartPC >= uint32(len(indexToAddr)) {
+			return fmt.Errorf("invalid StartPC index %d: %s at index %d", d.StartPC, label, i)
+		}
+		d.StartPC = uint32(indexToAddr[d.StartPC])
+		defers[i] = d
+	}
+	return nil
 }
 
 // parses code section and translates jump addresses to addresses, returning
@@ -225,6 +238,26 @@ func (a *asm) code(fields []string) ([]string, []int) {
 	return fields, indexToAddr
 }
 
+func (a *asm) defers(fields []string) []string {
+	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "defers:") {
+		return fields
+	}
+
+	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
+		if len(fields) != 3 {
+			a.err = fmt.Errorf("invalid defer: expected pc0, pc1 and startpc, got %d fields", len(fields))
+			return fields
+		}
+
+		a.fn.Defers = append(a.fn.Defers, Defer{
+			PC0:     uint32(a.uint(fields[0])),
+			PC1:     uint32(a.uint(fields[1])),
+			StartPC: uint32(a.uint(fields[2])),
+		})
+	}
+	return fields
+}
+
 func (a *asm) catches(fields []string) []string {
 	if a.err != nil || len(fields) == 0 || !strings.EqualFold(fields[0], "catches:") {
 		return fields
@@ -236,7 +269,7 @@ func (a *asm) catches(fields []string) []string {
 			return fields
 		}
 
-		a.fn.Catches = append(a.fn.Catches, Catch{
+		a.fn.Catches = append(a.fn.Catches, Defer{
 			PC0:     uint32(a.uint(fields[0])),
 			PC1:     uint32(a.uint(fields[1])),
 			StartPC: uint32(a.uint(fields[2])),
@@ -294,8 +327,9 @@ func (a *asm) constants(fields []string) []string {
 	}
 
 	for fields = a.next(); len(fields) > 0 && !sections[fields[0]]; fields = a.next() {
-		// TODO: string and bytes constants may have whitespace in the value, need to keep
-		// the raw line around and extract the whole quoted value from the raw line.
+		// string and bytes constants may have whitespace in the value, need to
+		// keep the raw line around and extract the whole quoted value from the raw
+		// line.
 		strVal := rxConstLineString.FindStringSubmatch(a.rawLine)
 		if strVal == nil && len(fields) != 2 {
 			a.err = fmt.Errorf("invalid constant: expected type and value, got %d fields", len(fields))
@@ -548,36 +582,25 @@ func (d *dasm) function(fn *Funcode) {
 		addr += sz
 	}
 
+	if len(fn.Defers) > 0 {
+		d.write("\tdefers:\n")
+		for i, df := range fn.Defers {
+			if err := translateDefer(addrToIndex, &df, "defer", fn.Name, i); err != nil { //nolint:gosec
+				d.err = err
+				return
+			}
+			d.writef("\t\t%03d %03d %03d\t# %03d\n", df.PC0, df.PC1, df.StartPC, i)
+		}
+	}
+
 	if len(fn.Catches) > 0 {
 		d.write("\tcatches:\n")
 		for i, c := range fn.Catches {
-			if c.PC0 >= uint32(len(addrToIndex)) {
-				d.err = fmt.Errorf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i)
+			if err := translateDefer(addrToIndex, &c, "catch", fn.Name, i); err != nil { //nolint:gosec
+				d.err = err
 				return
 			}
-			if c.PC1 >= uint32(len(addrToIndex)) {
-				d.err = fmt.Errorf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i)
-				return
-			}
-			if c.StartPC >= uint32(len(addrToIndex)) {
-				d.err = fmt.Errorf("invalid catch.startpc address in function %s, catch %d", fn.Name, i)
-				return
-			}
-
-			pc0, pc1, spc := addrToIndex[c.PC0], addrToIndex[c.PC1], addrToIndex[c.StartPC]
-			if pc0 < 0 {
-				d.err = fmt.Errorf("invalid catch.pc0 address in function %s, catch %d", fn.Name, i)
-				return
-			}
-			if pc1 < 0 {
-				d.err = fmt.Errorf("invalid catch.pc1 address in function %s, catch %d", fn.Name, i)
-				return
-			}
-			if spc < 0 {
-				d.err = fmt.Errorf("invalid catch.startpc address in function %s, catch %d", fn.Name, i)
-				return
-			}
-			d.writef("\t\t%03d %03d %03d\t# %03d\n", pc0, pc1, spc, i)
+			d.writef("\t\t%03d %03d %03d\t# %03d\n", c.PC0, c.PC1, c.StartPC, i)
 		}
 	}
 
@@ -599,6 +622,32 @@ func (d *dasm) function(fn *Funcode) {
 			}
 		}
 	}
+}
+
+func translateDefer(addrToIndex []int, defr *Defer, label, fnName string, i int) error {
+	if defr.PC0 >= uint32(len(addrToIndex)) {
+		return fmt.Errorf("invalid %s.pc0 address in function %s, %s %d", label, fnName, label, i)
+	}
+	if defr.PC1 >= uint32(len(addrToIndex)) {
+		return fmt.Errorf("invalid %s.pc1 address in function %s, %s %d", label, fnName, label, i)
+	}
+	if defr.StartPC >= uint32(len(addrToIndex)) {
+		return fmt.Errorf("invalid %s.startpc address in function %s, %s %d", label, fnName, label, i)
+	}
+
+	pc0, pc1, spc := addrToIndex[defr.PC0], addrToIndex[defr.PC1], addrToIndex[defr.StartPC]
+	if pc0 < 0 {
+		return fmt.Errorf("invalid %s.pc0 address in function %s, %s %d", label, fnName, label, i)
+	}
+	if pc1 < 0 {
+		return fmt.Errorf("invalid %s.pc1 address in function %s, %s %d", label, fnName, label, i)
+	}
+	if spc < 0 {
+		return fmt.Errorf("invalid %s.startpc address in function %s, %s %d", label, fnName, label, i)
+	}
+
+	defr.PC0, defr.PC1, defr.StartPC = uint32(pc0), uint32(pc1), uint32(spc)
+	return nil
 }
 
 func (d *dasm) program() {
