@@ -112,6 +112,8 @@ const ( //nolint:revive
 	INPLACE_ADD  //            x y INPLACE_ADD  z      where z is x+y or x.extend(y)
 	INPLACE_PIPE //            x y INPLACE_PIPE z      where z is x|y
 	MAKEDICT     //              - MAKEDICT     dict
+	RUNDEFER     //              - RUNDEFER     -      next opcode must run deferred blocks
+	DEFEREXIT    //              - DEFEREXIT    -      if no more deferred block to execute, resume
 
 	// --- opcodes with an argument must go below this line ---
 
@@ -120,6 +122,7 @@ const ( //nolint:revive
 	CJMP    //         cond CJMP<addr>    -
 	ITERJMP //            - ITERJMP<addr> elem   (and fall through) [acts on topmost iterator]
 	//       or:          - ITERJMP<addr> -      (and jump)
+	CATCHJMP //           - CATCHJMP<addr> -     (jump to addr on catch block exit)
 
 	CONSTANT     //                 - CONSTANT<constant>  value
 	MAKETUPLE    //         x1 ... xn MAKETUPLE<n>        tuple
@@ -149,7 +152,7 @@ const ( //nolint:revive
 	OpcodeArgMin = JMP
 	OpcodeMax    = CALL_VAR_KW
 	opcodeJMPMin = JMP
-	opcodeJMPMax = ITERJMP
+	opcodeJMPMax = CATCHJMP
 )
 
 var opcodeNames = [...]string{
@@ -160,9 +163,11 @@ var opcodeNames = [...]string{
 	CALL_KW:      "call_kw",
 	CALL_VAR:     "call_var",
 	CALL_VAR_KW:  "call_var_kw",
+	CATCHJMP:     "catchjmp",
 	CIRCUMFLEX:   "circumflex",
 	CJMP:         "cjmp",
 	CONSTANT:     "constant",
+	DEFEREXIT:    "deferexit",
 	DUP2:         "dup2",
 	DUP:          "dup",
 	EQL:          "eql",
@@ -204,6 +209,7 @@ var opcodeNames = [...]string{
 	POP:          "pop",
 	PREDECLARED:  "predeclared",
 	RETURN:       "return",
+	RUNDEFER:     "rundefer",
 	SETDICT:      "setdict",
 	SETDICTUNIQ:  "setdictuniq",
 	SETFIELD:     "setfield",
@@ -258,9 +264,11 @@ var stackEffect = [...]int8{
 	CALL_KW:      variableStackEffect,
 	CALL_VAR:     variableStackEffect,
 	CALL_VAR_KW:  variableStackEffect,
+	CATCHJMP:     0,
 	CIRCUMFLEX:   -1,
 	CJMP:         -1,
 	CONSTANT:     +1,
+	DEFEREXIT:    0,
 	DUP2:         +2,
 	DUP:          +1,
 	EQL:          -1,
@@ -301,6 +309,7 @@ var stackEffect = [...]int8{
 	POP:          -1,
 	PREDECLARED:  +1,
 	RETURN:       -1,
+	RUNDEFER:     0,
 	SETLOCALCELL: -1,
 	SETDICT:      -3,
 	SETDICTUNIQ:  -3,

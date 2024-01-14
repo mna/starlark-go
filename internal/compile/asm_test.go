@@ -234,6 +234,18 @@ func TestAsm(t *testing.T) {
 							FALSE
 							NOP
 							JMP 1
+
+					function: Defer 2 1 1 +varargs
+						locals:
+							x
+						defers:
+							2 3 1
+						code:
+							TRUE
+							DUP
+							FALSE
+							NOP
+							JMP 1
 			`, ""},
 	}
 	for _, c := range cases {
