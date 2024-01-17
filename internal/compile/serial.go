@@ -52,7 +52,7 @@ package compile
 //	filename	string
 //	line, col	varint
 //
-// Catch:
+// Catch and Defer:
 //   pc0, pc1 varint
 //   startpc  varint
 //
@@ -192,16 +192,16 @@ func (e *encoder) bindings(binds []Binding) {
 	}
 }
 
-func (e *encoder) catch(catch Defer) {
-	e.uint32(catch.PC0)
-	e.uint32(catch.PC1)
-	e.uint32(catch.StartPC)
+func (e *encoder) defer_(d Defer) {
+	e.uint32(d.PC0)
+	e.uint32(d.PC1)
+	e.uint32(d.StartPC)
 }
 
-func (e *encoder) catches(catches []Defer) {
-	e.int(len(catches))
-	for _, catch := range catches {
-		e.catch(catch)
+func (e *encoder) defers(ds []Defer) {
+	e.int(len(ds))
+	for _, d := range ds {
+		e.defer_(d)
 	}
 }
 
@@ -219,7 +219,8 @@ func (e *encoder) function(fn *Funcode) {
 		e.int(index)
 	}
 	e.bindings(fn.Freevars)
-	e.catches(fn.Catches)
+	e.defers(fn.Defers)
+	e.defers(fn.Catches)
 	e.int(fn.MaxStack)
 	e.int(fn.NumParams)
 	e.int(fn.NumKwonlyParams)
@@ -377,19 +378,19 @@ func (d *decoder) bindings() []Binding {
 	return bindings
 }
 
-func (d *decoder) catch() Defer {
+func (d *decoder) defer_() Defer {
 	pc0 := uint32(d.uint64())
 	pc1 := uint32(d.uint64())
 	spc := uint32(d.uint64())
 	return Defer{PC0: pc0, PC1: pc1, StartPC: spc}
 }
 
-func (d *decoder) catches() []Defer {
-	catches := make([]Defer, d.int())
-	for i := range catches {
-		catches[i] = d.catch()
+func (d *decoder) defers() []Defer {
+	defers := make([]Defer, d.int())
+	for i := range defers {
+		defers[i] = d.defer_()
 	}
-	return catches
+	return defers
 }
 
 func (d *decoder) ints() []int {
@@ -414,7 +415,8 @@ func (d *decoder) function() *Funcode {
 	locals := d.bindings()
 	cells := d.ints()
 	freevars := d.bindings()
-	catches := d.catches()
+	defers := d.defers()
+	catches := d.defers()
 	maxStack := d.int()
 	numParams := d.int()
 	numKwonlyParams := d.int()
@@ -430,6 +432,7 @@ func (d *decoder) function() *Funcode {
 		Locals:          locals,
 		Cells:           cells,
 		Freevars:        freevars,
+		Defers:          defers,
 		Catches:         catches,
 		MaxStack:        maxStack,
 		NumParams:       numParams,

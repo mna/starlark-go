@@ -411,6 +411,9 @@ func clearPosInfo(p *compile.Program) {
 		if len(fn.Freevars) == 0 {
 			fn.Freevars = nil
 		}
+		if len(fn.Defers) == 0 {
+			fn.Defers = nil
+		}
 		if len(fn.Catches) == 0 {
 			fn.Catches = nil
 		}
