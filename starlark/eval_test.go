@@ -475,12 +475,13 @@ func TestInt(t *testing.T) {
 }
 
 func backtrace(t *testing.T, err error) string {
-	switch err := err.(type) {
-	case *starlark.EvalError:
-		return err.Backtrace()
-	case nil:
+	var ee *starlark.EvalError
+	if errors.As(err, &ee) {
+		return ee.Backtrace()
+	}
+	if err == nil {
 		t.Fatalf("ExecFile succeeded unexpectedly")
-	default:
+	} else {
 		t.Fatalf("ExecFile failed with %v, wanted *EvalError", err)
 	}
 	panic("unreachable")
