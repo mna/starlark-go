@@ -403,8 +403,8 @@ type Defer struct {
 	StartPC  uint32 // start of the defer/catch instructions
 }
 
-func (c Defer) Covers(pc uint32) bool {
-	return c.PC0 <= pc && pc <= c.PC1
+func (c Defer) Covers(pc int64) bool {
+	return int64(c.PC0) <= pc && pc <= int64(c.PC1)
 }
 
 // A pcomp holds the compiler state for a Program.

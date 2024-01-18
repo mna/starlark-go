@@ -54,6 +54,15 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	locals := space[:nlocals:nlocals] // local variables, starting with parameters
 	stack := space[nlocals:]          // operand stack
 
+	// create the deferred stack
+	// TODO(opt): currently this is naive and just counts the number of
+	// defers/catches, but the exact stack size should be known statically.
+	var deferredStack []int64
+	if n := len(f.Defers) + len(f.Catches); n > 0 {
+		deferredStack = make([]int64, 0, n)
+	}
+	_ = deferredStack
+
 	// Digest arguments and set parameters.
 	if err := setArgs(locals, fn, args, kwargs); err != nil {
 		return nil, thread.evalError(err)
@@ -671,6 +680,12 @@ loop:
 			sp++
 
 		case compile.RUNDEFER:
+			// TODO(opt): for defers, it is known statically what defer should run,
+			// so this opcode could encode as argument the index of the defer to run,
+			// and then DEFEREXIT could do the same for the next one (if there are
+			// many to run). Hmm or actually for DEFEREXIT it is not known
+			// statically, as a defer can be triggered via multiple RUNDEFER. But at
+			// least for RUNDEFER it is known.
 			runDefer = true
 
 		case compile.DEFEREXIT:
@@ -695,7 +710,7 @@ loop:
 		// catchable (some, like thread cancelled, should not be).
 		for i := len(f.Catches) - 1; i >= 0; i-- {
 			c := f.Catches[i]
-			if c.Covers(fr.pc) {
+			if c.Covers(int64(fr.pc)) {
 				// run that catch block
 				caughtErr, inFlightErr = inFlightErr, nil
 				pc = c.StartPC
@@ -706,6 +721,33 @@ loop:
 
 	// (deferred cleanup runs here)
 	return result, inFlightErr
+}
+
+// TODO(opt): check if this would benefit from being done inline, and if
+// something like an interval tree would be faster than looping through all
+// defers/catches (I suspect looping is faster when n is small and would
+// generally be very small, i.e. < 10 and probably even < 5).
+func hasDeferredExecution(from, to int64, defr, catch []compile.Defer, pc *uint32) bool {
+	target := -1
+	for _, d := range defr {
+		if d.Covers(from) && !d.Covers(to) {
+			if int(d.StartPC) > target {
+				target = int(d.StartPC)
+			}
+		}
+	}
+	for _, d := range catch {
+		if d.Covers(from) && !d.Covers(to) {
+			if int(d.StartPC) > target {
+				target = int(d.StartPC)
+			}
+		}
+	}
+	if target >= 0 {
+		*pc = uint32(target)
+		return true
+	}
+	return false
 }
 
 // mandatory is a sentinel value used in a function's defaults tuple
