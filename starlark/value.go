@@ -1428,6 +1428,7 @@ func Compare(op syntax.Token, x, y Value) (bool, error) {
 // in cyclic data structures.
 func CompareDepth(op syntax.Token, x, y Value, depth int) (bool, error) {
 	if depth < 1 {
+		// TODO: critical, non-catchable error
 		return false, fmt.Errorf("comparison exceeded maximum recursion depth")
 	}
 	if sameType(x, y) {

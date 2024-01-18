@@ -93,13 +93,7 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	sp := 0
 	var pc uint32
 	var result Value
-	// TODO(mna): if caughtErr is exposed via a built-in (e.g. 'exception()') and
-	// the parser ensures that built-in can only be called in a catch block, then
-	// there's no need to clear the error - it will always be set to the proper
-	// in flight error inside a catch block. But the caught error could be
-	// retrieved in arbitrarily-nested function calls from the catch block (or
-	// not), so it needs a solution for that. I think it'd still need to be
-	// cleared, but the check could be done only when that built-in is called.
+	var runDefer bool
 	var inFlightErr, caughtErr error // always either one or the other set
 	code := f.Code
 	_ = caughtErr
@@ -114,6 +108,7 @@ loop:
 			}
 		}
 		if reason := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&thread.cancelReason))); reason != nil {
+			// TODO: critical, non-catchable error
 			inFlightErr = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
 			break loop
 		}
@@ -287,6 +282,11 @@ loop:
 			sp++
 
 		case compile.JMP:
+			if runDefer {
+				// TODO: look for deferred execution and push arg to the deferred
+				// stack if there is one to run.
+				runDefer = false
+			}
 			pc = arg
 
 		case compile.CALL, compile.CALL_VAR, compile.CALL_KW, compile.CALL_VAR_KW:
@@ -398,6 +398,11 @@ loop:
 			if iter.Next(&stack[sp]) {
 				sp++
 			} else {
+				if runDefer {
+					// TODO: look for deferred blocks and push arg to the deferred stack
+					// if there is one to run.
+					runDefer = false
+				}
 				pc = arg
 			}
 
@@ -411,6 +416,10 @@ loop:
 
 		case compile.RETURN:
 			result = stack[sp-1]
+			if runDefer {
+				// TODO: look for deferred blocks to run prior to returning
+				runDefer = false
+			}
 			break loop
 
 		case compile.SETINDEX:
@@ -522,6 +531,11 @@ loop:
 
 		case compile.CJMP:
 			if stack[sp-1].Truth() {
+				if runDefer {
+					// TODO: look for deferred execution, push arg to deferred stack if
+					// there are any and run them.
+					runDefer = false
+				}
 				pc = arg
 			}
 			sp--
@@ -656,7 +670,20 @@ loop:
 			stack[sp] = Universe[f.Prog.Names[arg]]
 			sp++
 
+		case compile.RUNDEFER:
+			runDefer = true
+
+		case compile.DEFEREXIT:
+			// TODO: look for deferred blocks and run if there is one, otherwise pop
+			// the return-to value from deferred stack.
+
+		case compile.CATCHJMP:
+			// TODO: look for deferred blocks and run if there is one, otherwise
+			// jump to arg (i.e. resume execution after the block that was recovered
+			// from an exception).
+
 		default:
+			// TODO: critical, non-catchable error
 			inFlightErr = fmt.Errorf("unimplemented: %s", op)
 			break loop
 		}
