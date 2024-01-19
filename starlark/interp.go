@@ -61,7 +61,6 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	if n := len(f.Defers) + len(f.Catches); n > 0 {
 		deferredStack = make([]int64, 0, n)
 	}
-	_ = deferredStack
 
 	// Digest arguments and set parameters.
 	if err := setArgs(locals, fn, args, kwargs); err != nil {
@@ -292,9 +291,11 @@ loop:
 
 		case compile.JMP:
 			if runDefer {
-				// TODO: look for deferred execution and push arg to the deferred
-				// stack if there is one to run.
 				runDefer = false
+				if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+					deferredStack = append(deferredStack, int64(arg))
+					break // switch, not loop (i.e. continue with defer block)
+				}
 			}
 			pc = arg
 
@@ -408,9 +409,11 @@ loop:
 				sp++
 			} else {
 				if runDefer {
-					// TODO: look for deferred blocks and push arg to the deferred stack
-					// if there is one to run.
 					runDefer = false
+					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+						deferredStack = append(deferredStack, int64(arg))
+						break // switch, not loop (i.e. continue with defer block)
+					}
 				}
 				pc = arg
 			}
@@ -426,8 +429,16 @@ loop:
 		case compile.RETURN:
 			result = stack[sp-1]
 			if runDefer {
-				// TODO: look for deferred blocks to run prior to returning
 				runDefer = false
+				// a RETURN "to" address is never covered by a deferred block (it jumps
+				// outside the function), so run any defers that covers the "from" pc
+				// (ignore catch blocks).
+				if hasDeferredExecution(int64(fr.pc), -1, f.Defers, nil, &pc) {
+					// -1 means break loop and return whatever result and inFlightErr are
+					// present
+					deferredStack = append(deferredStack, -1)
+					break // switch, not loop (i.e. continue)
+				}
 			}
 			break loop
 
@@ -541,9 +552,11 @@ loop:
 		case compile.CJMP:
 			if stack[sp-1].Truth() {
 				if runDefer {
-					// TODO: look for deferred execution, push arg to deferred stack if
-					// there are any and run them.
 					runDefer = false
+					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+						deferredStack = append(deferredStack, int64(arg))
+						break // switch, not loop (i.e. continue with defer block)
+					}
 				}
 				pc = arg
 			}
@@ -689,13 +702,31 @@ loop:
 			runDefer = true
 
 		case compile.DEFEREXIT:
-			// TODO: look for deferred blocks and run if there is one, otherwise pop
-			// the return-to value from deferred stack.
+			returnTo := deferredStack[len(deferredStack)-1]
+			deferredStack = deferredStack[:len(deferredStack)-1] // pop
+
+			// TODO: need to pass catch blocks too if there was an exception raised
+			// and the first deferred execution was a defer. Maybe store -2 in
+			// deferredStack in that case?
+			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, nil, &pc) {
+				deferredStack = append(deferredStack, returnTo)
+				break // switch, not loop (i.e. continue with defer block)
+			}
+			if returnTo < 0 {
+				break loop
+			}
+			pc = uint32(returnTo)
 
 		case compile.CATCHJMP:
-			// TODO: look for deferred blocks and run if there is one, otherwise
-			// jump to arg (i.e. resume execution after the block that was recovered
-			// from an exception).
+			// this is the normal exit of a catch block, so it clears the inFlightErr
+			// TODO: put that in the frame so the "error" built-in has access to it?
+			inFlightErr = nil
+
+			if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+				deferredStack = append(deferredStack, int64(arg))
+				break // switch, not loop (i.e. continue with defer block)
+			}
+			pc = arg
 
 		default:
 			// TODO: critical, non-catchable error
