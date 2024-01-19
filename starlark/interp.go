@@ -434,6 +434,7 @@ loop:
 			// RETURN always clears inFlightErr (and CATCHJMP is not needed when a
 			// catch ends in a return).
 			result = stack[sp-1]
+			sp--
 			inFlightErr = nil
 			if runDefer {
 				runDefer = false

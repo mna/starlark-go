@@ -1,3 +1,5 @@
+### nofail: ok
+
 program:
 
 function: top 1 0 0

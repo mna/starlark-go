@@ -12,10 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	rxFail   = regexp.MustCompile(`(?m)^\s*###\s*fail:\s*(.+)$`)
-	rxResult = regexp.MustCompile(`(?m)^\s*###\s*result:\s*(.+)$`)
-)
+var rxAssertGlobal = regexp.MustCompile(`(?m)^\s*###\s*([a-zA-Z][a-zA-Z0-9_]*):\s*(.+)$`)
 
 func TestExecAsm(t *testing.T) {
 	dir := filepath.Join("testdata", "asm")
@@ -39,22 +36,39 @@ func TestExecAsm(t *testing.T) {
 			prog := &Program{cprog}
 			out, err := prog.Init(&thread, predeclared)
 
-			// check expectations in the form of '### fail: <error message>' or '### result: <value>'
-			if ms := rxFail.FindSubmatch(b); ms != nil {
-				require.ErrorContains(t, err, strings.TrimSpace(string(ms[1])))
-			} else if ms := rxResult.FindSubmatch(b); ms != nil {
-				result := out["result"]
-				require.NotNil(t, result)
-				want := strings.TrimSpace(string(ms[1]))
-				if want == "None" {
-					require.Equal(t, None, result)
-				} else if n, err := strconv.ParseInt(want, 10, 64); err == nil {
-					got, err := AsInt32(result)
+			// check expectations in the form of '### fail: <error message>' or '###
+			// global_name: <value>' (both can be combined, it may fail but still assert
+			// some globals)
+			ms := rxAssertGlobal.FindAllStringSubmatch(string(b), -1)
+			require.NotNil(t, ms, "no assertion provided")
+			var errAsserted bool
+			for _, m := range ms {
+				want := strings.TrimSpace(m[2])
+				switch global := m[1]; global {
+				case "fail":
+					errAsserted = true
+					require.ErrorContains(t, err, want)
+				case "nofail":
+					errAsserted = true
 					require.NoError(t, err)
-					require.Equal(t, n, int64(got))
-				} else {
-					require.Failf(t, "unexpected result", "want %s, got %v (%[2]T)", want, result)
+				default:
+					// assert the provided global
+					g := out[global]
+					require.NotNil(t, g, "global %s does not exist", global)
+					if want == "None" {
+						require.Equal(t, None, g, "global %s", global)
+					} else if n, err := strconv.ParseInt(want, 10, 64); err == nil {
+						got, err := AsInt32(g)
+						require.NoError(t, err)
+						require.Equal(t, n, int64(got), "global %s", global)
+					} else {
+						require.Failf(t, "unexpected result", "global %s: want %s, got %v (%[2]T)", global, want, g)
+					}
 				}
+			}
+			if !errAsserted {
+				// default to no error expected
+				require.NoError(t, err)
 			}
 		})
 	}

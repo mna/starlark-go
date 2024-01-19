@@ -26,7 +26,7 @@ function: top 2 0 0
 		CONSTANT 2 # 2
 		SETGLOBAL 0 # result = 2
 		NONE
-		RETURN
+		RETURN      # no need to end with CATCHJMP as it would be unreachable
 
 		MAKETUPLE 0 # no args
 		MAKEFUNC 0  # fn
