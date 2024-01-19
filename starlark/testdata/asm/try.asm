@@ -15,7 +15,7 @@ function: top 2 0 0  # x = try 1 + "a"
 	code:
 		JMP  3     # goto try
 		NONE
-		JMP  6     # goto setlocal
+		CATCHJMP  6     # goto setlocal
 
 		# try 1 + "a"
 		CONSTANT 0 # 1

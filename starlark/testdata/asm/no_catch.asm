@@ -22,7 +22,7 @@ function: top 2 0 0
 	catches:
 		5 8 1
 	code:
-		JMP  5     # goto makefunc
+		JMP  5     # goto maketuple
 		CONSTANT 2 # 2
 		SETGLOBAL 0 # result = 2
 		NONE

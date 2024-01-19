@@ -98,13 +98,15 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 		fr.locals = nil
 	}()
 
+	var (
+		pc          uint32
+		result      Value
+		runDefer    bool
+		inFlightErr error
+	)
+
 	sp := 0
-	var pc uint32
-	var result Value
-	var runDefer bool
-	var inFlightErr, caughtErr error // always either one or the other set
 	code := f.Code
-	_ = caughtErr
 loop:
 	for {
 		thread.Steps++
@@ -293,8 +295,8 @@ loop:
 			if runDefer {
 				runDefer = false
 				if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
-					deferredStack = append(deferredStack, int64(arg))
-					break // switch, not loop (i.e. continue with defer block)
+					deferredStack = append(deferredStack, int64(arg)) // push
+					break
 				}
 			}
 			pc = arg
@@ -411,8 +413,8 @@ loop:
 				if runDefer {
 					runDefer = false
 					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
-						deferredStack = append(deferredStack, int64(arg))
-						break // switch, not loop (i.e. continue with defer block)
+						deferredStack = append(deferredStack, int64(arg)) // push
+						break
 					}
 				}
 				pc = arg
@@ -427,7 +429,12 @@ loop:
 			stack[sp-1] = !stack[sp-1].Truth()
 
 		case compile.RETURN:
+			// TODO(mna): if we allow RETURN in a defer, does that clear the
+			// inFlightErr? I think we should only allow it in a catch, so that
+			// RETURN always clears inFlightErr (and CATCHJMP is not needed when a
+			// catch ends in a return).
 			result = stack[sp-1]
+			inFlightErr = nil
 			if runDefer {
 				runDefer = false
 				// a RETURN "to" address is never covered by a deferred block (it jumps
@@ -436,8 +443,8 @@ loop:
 				if hasDeferredExecution(int64(fr.pc), -1, f.Defers, nil, &pc) {
 					// -1 means break loop and return whatever result and inFlightErr are
 					// present
-					deferredStack = append(deferredStack, -1)
-					break // switch, not loop (i.e. continue)
+					deferredStack = append(deferredStack, -1) // push
+					break
 				}
 			}
 			break loop
@@ -554,8 +561,8 @@ loop:
 				if runDefer {
 					runDefer = false
 					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
-						deferredStack = append(deferredStack, int64(arg))
-						break // switch, not loop (i.e. continue with defer block)
+						deferredStack = append(deferredStack, int64(arg)) // push
+						break
 					}
 				}
 				pc = arg
@@ -702,16 +709,23 @@ loop:
 			runDefer = true
 
 		case compile.DEFEREXIT:
-			returnTo := deferredStack[len(deferredStack)-1]
-			deferredStack = deferredStack[:len(deferredStack)-1] // pop
+			// read target address but do not pop it yet, depends if there's more
+			// deferred execution to run.
+			returnTo := deferredStack[len(deferredStack)-1] // peek
 
-			// TODO: need to pass catch blocks too if there was an exception raised
-			// and the first deferred execution was a defer. Maybe store -2 in
-			// deferredStack in that case?
-			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, nil, &pc) {
-				deferredStack = append(deferredStack, returnTo)
-				break // switch, not loop (i.e. continue with defer block)
+			// if there's an in-flight error, the next deferred execution could be a
+			// catch (e.g. a defer could've been the first deferred execution when it
+			// was raised, and a catch is still possible). Otherwise, do not consider
+			// them.
+			var catch []compile.Defer
+			if inFlightErr != nil {
+				catch = f.Catches
 			}
+			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, catch, &pc) {
+				break
+			}
+
+			deferredStack = deferredStack[:len(deferredStack)-1] // pop
 			if returnTo < 0 {
 				break loop
 			}
@@ -722,9 +736,23 @@ loop:
 			// TODO: put that in the frame so the "error" built-in has access to it?
 			inFlightErr = nil
 
-			if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
-				deferredStack = append(deferredStack, int64(arg))
-				break // switch, not loop (i.e. continue with defer block)
+			// special-case: if jump address is 0 - which is impossible for a
+			// CATCHJMP because it always jumps forward to after the parent block -,
+			// treat it as -1 and set the return value to `none` (i.e. it is
+			// equivalent to a top-level catch in a function, it covers the whole
+			// function and on error acts as if there was no explicit RETURN, which
+			// means an implicit 'return nil' in high-level language syntax.
+			returnTo := int64(arg)
+			if arg == 0 {
+				result = None
+				returnTo = -1
+			}
+			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, nil, &pc) {
+				deferredStack = append(deferredStack, returnTo) // push
+				break
+			}
+			if returnTo < 0 {
+				break loop
 			}
 			pc = arg
 
@@ -736,17 +764,10 @@ loop:
 	}
 
 	if inFlightErr != nil {
-		// all places where inFlightErr is set are followed by 'break loop', so
-		// this is the perfect spot to check for a catch block if the error is
-		// catchable (some, like thread cancelled, should not be).
-		for i := len(f.Catches) - 1; i >= 0; i-- {
-			c := f.Catches[i]
-			if c.Covers(int64(fr.pc)) {
-				// run that catch block
-				caughtErr, inFlightErr = inFlightErr, nil
-				pc = c.StartPC
-				goto loop
-			}
+		if hasDeferredExecution(int64(fr.pc), -1, f.Defers, f.Catches, &pc) {
+			// by default, pending action is to exit the function
+			deferredStack = append(deferredStack, -1) // push
+			goto loop
 		}
 	}
 
