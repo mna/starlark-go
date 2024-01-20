@@ -888,7 +888,6 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 			if y, ok := y.(Int); ok {
 				return tupleRepeat(x, y)
 			}
-
 		}
 
 	case syntax.SLASH:
