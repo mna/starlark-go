@@ -50,10 +50,10 @@ type Thread struct {
 	// The default behavior is to call thread.Cancel("too many steps").
 	OnMaxSteps func(thread *Thread)
 
-	// Steps a count of abstract computation steps executed
-	// by this thread. It is incremented by the interpreter. It may be used
-	// as a measure of the approximate cost of Starlark execution, by
-	// computing the difference in its value before and after a computation.
+	// Steps is a count of abstract computation steps executed by this thread. It
+	// is incremented by the interpreter. It may be used as a measure of the
+	// approximate cost of Starlark execution, by computing the difference in its
+	// value before and after a computation.
 	//
 	// The precise meaning of "step" is not specified and may change.
 	Steps, maxSteps uint64

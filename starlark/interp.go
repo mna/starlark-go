@@ -54,9 +54,16 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 	locals := space[:nlocals:nlocals] // local variables, starting with parameters
 	stack := space[nlocals:]          // operand stack
 
+	// create the deferred stack
+	// TODO(opt): currently this is naive and just counts the number of
+	// defers/catches, but the exact stack size should be known statically.
+	var deferredStack []int64
+	if n := len(f.Defers) + len(f.Catches); n > 0 {
+		deferredStack = make([]int64, 0, n)
+	}
+
 	// Digest arguments and set parameters.
-	err := setArgs(locals, fn, args, kwargs)
-	if err != nil {
+	if err := setArgs(locals, fn, args, kwargs); err != nil {
 		return nil, thread.evalError(err)
 	}
 
@@ -74,9 +81,9 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 		locals[index] = &cell{locals[index]}
 	}
 
-	// TODO(adonovan): add static check that beneath this point
+	// TODO: add static check that beneath this point
 	// - there is exactly one return statement
-	// - there is no redefinition of 'err'.
+	// - there is no redefinition of 'inFlightErr'.
 
 	var iterstack []Iterator // stack of active iterators
 
@@ -91,9 +98,14 @@ func (fn *Function) CallInternal(thread *Thread, args Tuple, kwargs []Tuple) (Va
 		fr.locals = nil
 	}()
 
+	var (
+		pc          uint32
+		result      Value
+		runDefer    bool
+		inFlightErr error
+	)
+
 	sp := 0
-	var pc uint32
-	var result Value
 	code := f.Code
 loop:
 	for {
@@ -106,7 +118,8 @@ loop:
 			}
 		}
 		if reason := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&thread.cancelReason))); reason != nil {
-			err = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
+			// TODO: critical, non-catchable error
+			inFlightErr = fmt.Errorf("Starlark computation cancelled: %s", *(*string)(reason))
 			break loop
 		}
 
@@ -158,7 +171,7 @@ loop:
 			sp -= 2
 			ok, err2 := Compare(op, x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = Bool(ok)
@@ -185,7 +198,7 @@ loop:
 			sp -= 2
 			z, err2 := Binary(binop, x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = z
@@ -201,7 +214,7 @@ loop:
 			x := stack[sp-1]
 			y, err2 := Unary(unop, x)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp-1] = y
@@ -217,7 +230,7 @@ loop:
 			var z Value
 			if xlist, ok := x.(*List); ok {
 				if yiter, ok := y.(Iterable); ok {
-					if err = xlist.checkMutable("apply += to"); err != nil {
+					if inFlightErr = xlist.checkMutable("apply += to"); inFlightErr != nil {
 						break loop
 					}
 					listExtend(xlist, yiter)
@@ -225,8 +238,8 @@ loop:
 				}
 			}
 			if z == nil {
-				z, err = Binary(syntax.PLUS, x, y)
-				if err != nil {
+				z, inFlightErr = Binary(syntax.PLUS, x, y)
+				if inFlightErr != nil {
 					break loop
 				}
 			}
@@ -245,7 +258,7 @@ loop:
 			var z Value
 			if xdict, ok := x.(*Dict); ok {
 				if ydict, ok := y.(*Dict); ok {
-					if err = xdict.ht.checkMutable("apply |= to"); err != nil {
+					if inFlightErr = xdict.ht.checkMutable("apply |= to"); inFlightErr != nil {
 						break loop
 					}
 					xdict.ht.addAll(&ydict.ht) // can't fail
@@ -253,8 +266,8 @@ loop:
 				}
 			}
 			if z == nil {
-				z, err = Binary(syntax.PIPE, x, y)
-				if err != nil {
+				z, inFlightErr = Binary(syntax.PIPE, x, y)
+				if inFlightErr != nil {
 					break loop
 				}
 			}
@@ -279,6 +292,13 @@ loop:
 			sp++
 
 		case compile.JMP:
+			if runDefer {
+				runDefer = false
+				if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+					deferredStack = append(deferredStack, int64(arg)) // push
+					break
+				}
+			}
 			pc = arg
 
 		case compile.CALL, compile.CALL_VAR, compile.CALL_KW, compile.CALL_VAR_KW:
@@ -312,13 +332,13 @@ loop:
 				// Add key/value items from **kwargs dictionary.
 				dict, ok := kwargs.(IterableMapping)
 				if !ok {
-					err = fmt.Errorf("argument after ** must be a mapping, not %s", kwargs.Type())
+					inFlightErr = fmt.Errorf("argument after ** must be a mapping, not %s", kwargs.Type())
 					break loop
 				}
 				items := dict.Items()
 				for _, item := range items {
 					if _, ok := item[0].(String); !ok {
-						err = fmt.Errorf("keywords must be strings, not %s", item[0].Type())
+						inFlightErr = fmt.Errorf("keywords must be strings, not %s", item[0].Type())
 						break loop
 					}
 				}
@@ -346,7 +366,7 @@ loop:
 				// Add elements from *args sequence.
 				iter := Iterate(args)
 				if iter == nil {
-					err = fmt.Errorf("argument after * must be iterable, not %s", args.Type())
+					inFlightErr = fmt.Errorf("argument after * must be iterable, not %s", args.Type())
 					break loop
 				}
 				var elem Value
@@ -367,7 +387,7 @@ loop:
 			z, err2 := Call(thread, function, positional, kvpairs)
 			thread.beginProfSpan()
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			if vmdebug {
@@ -380,7 +400,7 @@ loop:
 			sp--
 			iter := Iterate(x)
 			if iter == nil {
-				err = fmt.Errorf("%s value is not iterable", x.Type())
+				inFlightErr = fmt.Errorf("%s value is not iterable", x.Type())
 				break loop
 			}
 			iterstack = append(iterstack, iter)
@@ -390,6 +410,13 @@ loop:
 			if iter.Next(&stack[sp]) {
 				sp++
 			} else {
+				if runDefer {
+					runDefer = false
+					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+						deferredStack = append(deferredStack, int64(arg)) // push
+						break
+					}
+				}
 				pc = arg
 			}
 
@@ -402,7 +429,25 @@ loop:
 			stack[sp-1] = !stack[sp-1].Truth()
 
 		case compile.RETURN:
+			// TODO(mna): if we allow RETURN in a defer, does that clear the
+			// inFlightErr? I think we should only allow it in a catch, so that
+			// RETURN always clears inFlightErr (and CATCHJMP is not needed when a
+			// catch ends in a return).
 			result = stack[sp-1]
+			sp--
+			inFlightErr = nil
+			if runDefer {
+				runDefer = false
+				// a RETURN "to" address is never covered by a deferred block (it jumps
+				// outside the function), so run any defers that covers the "from" pc
+				// (ignore catch blocks).
+				if hasDeferredExecution(int64(fr.pc), -1, f.Defers, nil, &pc) {
+					// -1 means break loop and return whatever result and inFlightErr are
+					// present
+					deferredStack = append(deferredStack, -1) // push
+					break
+				}
+			}
 			break loop
 
 		case compile.SETINDEX:
@@ -410,8 +455,8 @@ loop:
 			y := stack[sp-2]
 			x := stack[sp-3]
 			sp -= 3
-			err = setIndex(x, y, z)
-			if err != nil {
+			inFlightErr = setIndex(x, y, z)
+			if inFlightErr != nil {
 				break loop
 			}
 
@@ -421,7 +466,7 @@ loop:
 			sp -= 2
 			z, err2 := getIndex(x, y)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = z
@@ -432,7 +477,7 @@ loop:
 			name := f.Prog.Names[arg]
 			y, err2 := getAttr(x, name)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp-1] = y
@@ -443,7 +488,7 @@ loop:
 			sp -= 2
 			name := f.Prog.Names[arg]
 			if err2 := setField(x, name, y); err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 
@@ -458,11 +503,11 @@ loop:
 			sp -= 3
 			oldlen := dict.Len()
 			if err2 := dict.SetKey(k, v); err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			if op == compile.SETDICTUNIQ && dict.Len() == oldlen {
-				err = fmt.Errorf("duplicate key: %v", k)
+				inFlightErr = fmt.Errorf("duplicate key: %v", k)
 				break loop
 			}
 
@@ -480,7 +525,7 @@ loop:
 			sp -= 4
 			res, err2 := slice(x, lo, hi, step)
 			if err2 != nil {
-				err = err2
+				inFlightErr = err2
 				break loop
 			}
 			stack[sp] = res
@@ -492,7 +537,7 @@ loop:
 			sp--
 			iter := Iterate(iterable)
 			if iter == nil {
-				err = fmt.Errorf("got %s in sequence assignment", iterable.Type())
+				inFlightErr = fmt.Errorf("got %s in sequence assignment", iterable.Type())
 				break loop
 			}
 			i := 0
@@ -503,17 +548,24 @@ loop:
 			var dummy Value
 			if iter.Next(&dummy) {
 				// NB: Len may return -1 here in obscure cases.
-				err = fmt.Errorf("too many values to unpack (got %d, want %d)", Len(iterable), n)
+				inFlightErr = fmt.Errorf("too many values to unpack (got %d, want %d)", Len(iterable), n)
 				break loop
 			}
 			iter.Done()
 			if i < n {
-				err = fmt.Errorf("too few values to unpack (got %d, want %d)", i, n)
+				inFlightErr = fmt.Errorf("too few values to unpack (got %d, want %d)", i, n)
 				break loop
 			}
 
 		case compile.CJMP:
 			if stack[sp-1].Truth() {
+				if runDefer {
+					runDefer = false
+					if hasDeferredExecution(int64(fr.pc), int64(arg), f.Defers, nil, &pc) {
+						deferredStack = append(deferredStack, int64(arg)) // push
+						break
+					}
+				}
 				pc = arg
 			}
 			sp--
@@ -557,7 +609,7 @@ loop:
 			sp--
 
 			if thread.Load == nil {
-				err = fmt.Errorf("load not implemented by this application")
+				inFlightErr = fmt.Errorf("load not implemented by this application")
 				break loop
 			}
 
@@ -565,10 +617,7 @@ loop:
 			dict, err2 := thread.Load(thread, module)
 			thread.beginProfSpan()
 			if err2 != nil {
-				err = wrappedError{
-					msg:   fmt.Sprintf("cannot load %s: %v", module, err2),
-					cause: err2,
-				}
+				inFlightErr = fmt.Errorf("cannot load %s: %w", module, err2)
 				break loop
 			}
 
@@ -576,9 +625,9 @@ loop:
 				from := string(stack[sp-1-i].(String))
 				v, ok := dict[from]
 				if !ok {
-					err = fmt.Errorf("load: name %s not found in module %s", from, module)
+					inFlightErr = fmt.Errorf("load: name %s not found in module %s", from, module)
 					if n := spell.Nearest(from, dict.Keys()); n != "" {
-						err = fmt.Errorf("%s (did you mean %s?)", err, n)
+						inFlightErr = fmt.Errorf("%s (did you mean %s?)", inFlightErr, n)
 					}
 					break loop
 				}
@@ -600,7 +649,7 @@ loop:
 		case compile.LOCAL:
 			x := locals[arg]
 			if x == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
 				break loop
 			}
 			stack[sp] = x
@@ -613,7 +662,7 @@ loop:
 		case compile.LOCALCELL:
 			v := locals[arg].(*cell).v
 			if v == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Locals[arg].Name)
 				break loop
 			}
 			stack[sp] = v
@@ -622,7 +671,7 @@ loop:
 		case compile.FREECELL:
 			v := fn.freevars[arg].(*cell).v
 			if v == nil {
-				err = fmt.Errorf("local variable %s referenced before assignment", f.Freevars[arg].Name)
+				inFlightErr = fmt.Errorf("local variable %s referenced before assignment", f.Freevars[arg].Name)
 				break loop
 			}
 			stack[sp] = v
@@ -631,7 +680,7 @@ loop:
 		case compile.GLOBAL:
 			x := fn.module.globals[arg]
 			if x == nil {
-				err = fmt.Errorf("global variable %s referenced before assignment", f.Prog.Globals[arg].Name)
+				inFlightErr = fmt.Errorf("global variable %s referenced before assignment", f.Prog.Globals[arg].Name)
 				break loop
 			}
 			stack[sp] = x
@@ -641,7 +690,7 @@ loop:
 			name := f.Prog.Names[arg]
 			x := fn.module.predeclared[name]
 			if x == nil {
-				err = fmt.Errorf("internal error: predeclared variable %s is uninitialized", name)
+				inFlightErr = fmt.Errorf("internal error: predeclared variable %s is uninitialized", name)
 				break loop
 			}
 			stack[sp] = x
@@ -651,28 +700,107 @@ loop:
 			stack[sp] = Universe[f.Prog.Names[arg]]
 			sp++
 
+		case compile.RUNDEFER:
+			// TODO(opt): for defers, it is known statically what defer should run,
+			// so this opcode could encode as argument the index of the defer to run,
+			// and then DEFEREXIT could do the same for the next one (if there are
+			// many to run). Hmm or actually for DEFEREXIT it is not known
+			// statically, as a defer can be triggered via multiple RUNDEFER. But at
+			// least for RUNDEFER it is known.
+			runDefer = true
+
+		case compile.DEFEREXIT:
+			// read target address but do not pop it yet, depends if there's more
+			// deferred execution to run.
+			returnTo := deferredStack[len(deferredStack)-1] // peek
+
+			// if there's an in-flight error, the next deferred execution could be a
+			// catch (e.g. a defer could've been the first deferred execution when it
+			// was raised, and a catch is still possible). Otherwise, do not consider
+			// them.
+			var catch []compile.Defer
+			if inFlightErr != nil {
+				catch = f.Catches
+			}
+			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, catch, &pc) {
+				break
+			}
+
+			deferredStack = deferredStack[:len(deferredStack)-1] // pop
+			if returnTo < 0 {
+				break loop
+			}
+			pc = uint32(returnTo)
+
+		case compile.CATCHJMP:
+			// this is the normal exit of a catch block, so it clears the inFlightErr
+			// TODO: put that in the frame so the "error" built-in has access to it?
+			inFlightErr = nil
+
+			// special-case: if jump address is 0 - which is impossible for a
+			// CATCHJMP because it always jumps forward to after the parent block -,
+			// treat it as -1 and set the return value to `none` (i.e. it is
+			// equivalent to a top-level catch in a function, it covers the whole
+			// function and on error acts as if there was no explicit RETURN, which
+			// means an implicit 'return nil' in high-level language syntax.
+			returnTo := int64(arg)
+			if arg == 0 {
+				result = None
+				returnTo = -1
+			}
+			if hasDeferredExecution(int64(fr.pc), returnTo, f.Defers, nil, &pc) {
+				deferredStack = append(deferredStack, returnTo) // push
+				break
+			}
+			if returnTo < 0 {
+				break loop
+			}
+			pc = arg
+
 		default:
-			err = fmt.Errorf("unimplemented: %s", op)
+			// TODO: critical, non-catchable error
+			inFlightErr = fmt.Errorf("unimplemented: %s", op)
 			break loop
 		}
 	}
+
+	if inFlightErr != nil {
+		if hasDeferredExecution(int64(fr.pc), -1, f.Defers, f.Catches, &pc) {
+			// by default, pending action is to exit the function
+			deferredStack = append(deferredStack, -1) // push
+			goto loop
+		}
+	}
+
 	// (deferred cleanup runs here)
-	return result, err
+	return result, inFlightErr
 }
 
-type wrappedError struct {
-	msg   string
-	cause error
-}
-
-func (e wrappedError) Error() string {
-	return e.msg
-}
-
-// Implements the xerrors.Wrapper interface
-// https://godoc.org/golang.org/x/xerrors#Wrapper
-func (e wrappedError) Unwrap() error {
-	return e.cause
+// TODO(opt): check if this would benefit from being done inline, and if
+// something like an interval tree would be faster than looping through all
+// defers/catches (I suspect looping is faster when n is small and would
+// generally be very small, i.e. < 10 and probably even < 5).
+func hasDeferredExecution(from, to int64, defr, catch []compile.Defer, pc *uint32) bool {
+	target := -1
+	for _, d := range defr {
+		if d.Covers(from) && !d.Covers(to) {
+			if int(d.StartPC) > target {
+				target = int(d.StartPC)
+			}
+		}
+	}
+	for _, d := range catch {
+		if d.Covers(from) && !d.Covers(to) {
+			if int(d.StartPC) > target {
+				target = int(d.StartPC)
+			}
+		}
+	}
+	if target >= 0 {
+		*pc = uint32(target)
+		return true
+	}
+	return false
 }
 
 // mandatory is a sentinel value used in a function's defaults tuple

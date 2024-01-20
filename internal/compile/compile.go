@@ -39,8 +39,8 @@ import (
 	"github.com/mna/nenuphar/syntax"
 )
 
-// Disassemble causes the assembly code for each function
-// to be printed to stderr as it is generated.
+// Disassemble causes the assembly code for each function to be printed to
+// stderr as it is generated during compilation.
 var Disassemble = false
 
 const debug = false // make code generation verbose, for debugging the compiler
@@ -99,7 +99,7 @@ const ( //nolint:revive
 	FALSE     // - FALSE False
 	MANDATORY // - MANDATORY Mandatory	     [sentinel value for required kwonly args]
 
-	ITERPUSH     //       iterable ITERPUSH     -  [pushes the iterator stack]
+	ITERPUSH     //       iterable ITERPUSH     -    [pushes the iterator stack]
 	ITERPOP      //              - ITERPOP      -    [pops the iterator stack]
 	NOT          //          value NOT          bool
 	RETURN       //          value RETURN       -
@@ -112,6 +112,8 @@ const ( //nolint:revive
 	INPLACE_ADD  //            x y INPLACE_ADD  z      where z is x+y or x.extend(y)
 	INPLACE_PIPE //            x y INPLACE_PIPE z      where z is x|y
 	MAKEDICT     //              - MAKEDICT     dict
+	RUNDEFER     //              - RUNDEFER     -      next opcode must run deferred blocks
+	DEFEREXIT    //              - DEFEREXIT    -      if no more deferred block to execute, resume
 
 	// --- opcodes with an argument must go below this line ---
 
@@ -120,12 +122,13 @@ const ( //nolint:revive
 	CJMP    //         cond CJMP<addr>    -
 	ITERJMP //            - ITERJMP<addr> elem   (and fall through) [acts on topmost iterator]
 	//       or:          - ITERJMP<addr> -      (and jump)
+	CATCHJMP //           - CATCHJMP<addr> -     (jump to addr on catch block exit)
 
 	CONSTANT     //                 - CONSTANT<constant>  value
 	MAKETUPLE    //         x1 ... xn MAKETUPLE<n>        tuple
 	MAKELIST     //         x1 ... xn MAKELIST<n>         list
 	MAKEFUNC     // defaults+freevars MAKEFUNC<func>      fn
-	LOAD         //   from1 ... fromN module LOAD<n>      v1 ... vN
+	LOAD         //  from1..fromN mod LOAD<n>             v1 .. vN
 	SETLOCAL     //             value SETLOCAL<local>     -
 	SETGLOBAL    //             value SETGLOBAL<global>   -
 	LOCAL        //                 - LOCAL<local>        value
@@ -148,21 +151,23 @@ const ( //nolint:revive
 
 	OpcodeArgMin = JMP
 	OpcodeMax    = CALL_VAR_KW
+	opcodeJMPMin = JMP
+	opcodeJMPMax = CATCHJMP
 )
-
-// TODO(adonovan): add dynamic checks for missing opcodes in the tables below.
 
 var opcodeNames = [...]string{
 	AMP:          "amp",
 	APPEND:       "append",
 	ATTR:         "attr",
 	CALL:         "call",
-	CALL_KW:      "call_kw ",
+	CALL_KW:      "call_kw",
 	CALL_VAR:     "call_var",
 	CALL_VAR_KW:  "call_var_kw",
+	CATCHJMP:     "catchjmp",
 	CIRCUMFLEX:   "circumflex",
 	CJMP:         "cjmp",
 	CONSTANT:     "constant",
+	DEFEREXIT:    "deferexit",
 	DUP2:         "dup2",
 	DUP:          "dup",
 	EQL:          "eql",
@@ -204,6 +209,7 @@ var opcodeNames = [...]string{
 	POP:          "pop",
 	PREDECLARED:  "predeclared",
 	RETURN:       "return",
+	RUNDEFER:     "rundefer",
 	SETDICT:      "setdict",
 	SETDICTUNIQ:  "setdictuniq",
 	SETFIELD:     "setfield",
@@ -223,6 +229,29 @@ var opcodeNames = [...]string{
 	UPLUS:        "uplus",
 }
 
+var reverseLookupOpcode = func() map[string]Opcode {
+	m := make(map[string]Opcode, len(opcodeNames))
+	for op, s := range opcodeNames {
+		m[s] = Opcode(op)
+	}
+	return m
+}()
+
+func isJump(op Opcode) bool {
+	// Jump op argument is always encoded with 4 bytes
+	return opcodeJMPMin <= op && op <= opcodeJMPMax
+}
+
+func encodedSize(op Opcode, arg uint32) int {
+	if op >= OpcodeArgMin {
+		if isJump(op) {
+			return 1 + 4
+		}
+		return 1 + varArgLen(arg)
+	}
+	return 1
+}
+
 const variableStackEffect = 0x7f
 
 // stackEffect records the effect on the size of the operand stack of
@@ -235,9 +264,11 @@ var stackEffect = [...]int8{
 	CALL_KW:      variableStackEffect,
 	CALL_VAR:     variableStackEffect,
 	CALL_VAR_KW:  variableStackEffect,
+	CATCHJMP:     0,
 	CIRCUMFLEX:   -1,
 	CJMP:         -1,
 	CONSTANT:     +1,
+	DEFEREXIT:    0,
 	DUP2:         +2,
 	DUP:          +1,
 	EQL:          -1,
@@ -278,6 +309,7 @@ var stackEffect = [...]int8{
 	POP:          -1,
 	PREDECLARED:  +1,
 	RETURN:       -1,
+	RUNDEFER:     0,
 	SETLOCALCELL: -1,
 	SETDICT:      -3,
 	SETDICTUNIQ:  -3,
@@ -297,7 +329,7 @@ var stackEffect = [...]int8{
 }
 
 func (op Opcode) String() string {
-	if op < OpcodeMax {
+	if op <= OpcodeMax {
 		if name := opcodeNames[op]; name != "" {
 			return name
 		}
@@ -336,6 +368,8 @@ type Funcode struct {
 	Locals                []Binding       // locals, parameters first
 	Cells                 []int           // indices of Locals that require cells
 	Freevars              []Binding       // for tracing
+	Defers                []Defer         // defer blocks, nested ones must come after the more general ones
+	Catches               []Defer         // catch blocks, nested ones must come after the more general ones
 	MaxStack              int
 	NumParams             int
 	NumKwonlyParams       int
@@ -358,6 +392,21 @@ type Binding struct {
 	Pos  syntax.Position
 }
 
+// Defer is a defer or catch block that runs if any error is raised by the
+// instructions that it covers. Emitted code for a defer block must ensure that
+// there is a JMP over the defer block (to PC0), that StartPC is the pc after
+// that JMP, and that the defer block does not fall through to the protected
+// block - it must end with a DEFEREXIT or CATCHJMP beyond PC1 or a CALL to a
+// function that always throws an error (a "rethrow"), etc.
+type Defer struct {
+	PC0, PC1 uint32 // start and end of protected instructions (inclusive), precondition: PC0 <= PC1
+	StartPC  uint32 // start of the defer/catch instructions
+}
+
+func (c Defer) Covers(pc int64) bool {
+	return int64(c.PC0) <= pc && pc <= int64(c.PC1)
+}
+
 // A pcomp holds the compiler state for a Program.
 type pcomp struct {
 	prog *Program // what we're building
@@ -375,12 +424,15 @@ type fcomp struct {
 	pos   syntax.Position // current position of generated code
 	loops []loop
 	block *block
+	// TODO(mna): probably needs to keep track of catch blocks during compilation?
 }
 
 type loop struct {
 	break_, continue_ *block
 }
 
+// block is a block of code - every executable line of code is compiled inside
+// a block.
 type block struct {
 	insns []insn
 
@@ -485,16 +537,16 @@ func bindings(bindings []*resolve.Binding) []Binding {
 	return res
 }
 
-// Expr compiles an expression to a program whose toplevel function evaluates it.
-// The options must be consistent with those used when parsing expr.
+// Expr compiles an expression to a program whose toplevel function evaluates
+// it. The options must be consistent with those used when parsing expr.
 func Expr(opts *syntax.FileOptions, expr syntax.Expr, name string, locals []*resolve.Binding) *Program {
 	pos := syntax.Start(expr)
 	stmts := []syntax.Stmt{&syntax.ReturnStmt{Result: expr}}
 	return File(opts, stmts, pos, name, locals, nil)
 }
 
-// File compiles the statements of a file into a program.
-// The options must be consistent with those used when parsing stmts.
+// File compiles the statements of a file into a program. The options must be
+// consistent with those used when parsing stmts.
 func File(opts *syntax.FileOptions, stmts []syntax.Stmt, pos syntax.Position, name string, locals, globals []*resolve.Binding) *Program {
 	pcomp := &pcomp{
 		prog: &Program{
@@ -590,7 +642,7 @@ func (pcomp *pcomp) function(name string, pos syntax.Position, stmts []syntax.St
 					cjmpAddr = &b.insns[i].arg
 					pc += 4
 				default:
-					pc += uint32(argLen(insn.arg))
+					pc += uint32(varArgLen(insn.arg))
 				}
 			}
 
@@ -791,16 +843,8 @@ func (fcomp *fcomp) generate(blocks []*block, codelen uint32) {
 			if Disassemble {
 				PrintOp(fcomp.fn, pc, insn.op, insn.arg)
 			}
-			code = append(code, byte(insn.op))
-			pc++
-			if insn.op >= OpcodeArgMin {
-				if insn.op == CJMP || insn.op == ITERJMP {
-					code = addUint32(code, insn.arg, 4) // pad arg to 4 bytes
-				} else {
-					code = addUint32(code, insn.arg, 0)
-				}
-				pc = uint32(len(code))
-			}
+			code = encodeInsn(code, insn.op, insn.arg)
+			pc = uint32(len(code))
 		}
 
 		if b.jmp != nil && b.jmp.index != b.index+1 {
@@ -809,8 +853,7 @@ func (fcomp *fcomp) generate(blocks []*block, codelen uint32) {
 				fmt.Fprintf(os.Stderr, "\t%d\tjmp\t\t%d\t; block %d\n",
 					pc, addr, b.jmp.index)
 			}
-			code = append(code, byte(JMP))
-			code = addUint32(code, addr, 4)
+			code = encodeInsn(code, JMP, addr)
 		}
 	}
 	if len(code) != int(codelen) {
@@ -832,6 +875,18 @@ func clip(x, min, max int32) (int32, bool) {
 	return x, true
 }
 
+func encodeInsn(code []byte, op Opcode, arg uint32) []byte {
+	code = append(code, byte(op))
+	if op >= OpcodeArgMin {
+		if isJump(op) {
+			code = addUint32(code, arg, 4) // pad arg to 4 bytes
+		} else {
+			code = addUint32(code, arg, 0)
+		}
+	}
+	return code
+}
+
 // addUint32 encodes x as 7-bit little-endian varint.
 // TODO(adonovan): opt: steal top two bits of opcode
 // to encode the number of complete bytes that follow.
@@ -849,7 +904,7 @@ func addUint32(code []byte, x uint32, min int) []byte {
 	return code
 }
 
-func argLen(x uint32) int {
+func varArgLen(x uint32) int {
 	n := 0
 	for x >= 0x80 {
 		n++
