@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -497,9 +496,7 @@ func makeToplevelFunction(prog *compile.Program, predeclared StringDict) *Functi
 		var v Value
 		switch c := c.(type) {
 		case int64:
-			v = MakeInt64(c)
-		case *big.Int:
-			v = MakeBigInt(c)
+			v = Int(c)
 		case string:
 			v = String(c)
 		case compile.Bytes:
@@ -765,12 +762,9 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		case Int:
 			switch y := y.(type) {
 			case Int:
-				return x.Add(y), nil
+				return x + y, nil
 			case Float:
-				xf, err := x.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				xf := Float(x)
 				return xf + y, nil
 			}
 		case Float:
@@ -778,10 +772,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 			case Float:
 				return x + y, nil
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				return x + yf, nil
 			}
 		case *List:
@@ -805,12 +796,9 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		case Int:
 			switch y := y.(type) {
 			case Int:
-				return x.Sub(y), nil
+				return x - y, nil
 			case Float:
-				xf, err := x.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				xf := Float(x)
 				return xf - y, nil
 			}
 		case Float:
@@ -818,10 +806,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 			case Float:
 				return x - y, nil
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				return x - yf, nil
 			}
 		case *Set: // difference
@@ -837,12 +822,9 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		case Int:
 			switch y := y.(type) {
 			case Int:
-				return x.Mul(y), nil
+				return x * y, nil
 			case Float:
-				xf, err := x.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				xf := Float(x)
 				return xf * y, nil
 			case String:
 				return stringRepeat(y, x)
@@ -862,10 +844,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 			case Float:
 				return x * y, nil
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				return x * yf, nil
 			}
 		case String:
@@ -888,22 +867,15 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 			if y, ok := y.(Int); ok {
 				return tupleRepeat(x, y)
 			}
-
 		}
 
 	case syntax.SLASH:
 		switch x := x.(type) {
 		case Int:
-			xf, err := x.finiteFloat()
-			if err != nil {
-				return nil, err
-			}
+			xf := Float(x)
 			switch y := y.(type) {
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				if yf == 0.0 {
 					return nil, fmt.Errorf("floating-point division by zero")
 				}
@@ -922,10 +894,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 				}
 				return x / y, nil
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				if yf == 0.0 {
 					return nil, fmt.Errorf("floating-point division by zero")
 				}
@@ -938,15 +907,12 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		case Int:
 			switch y := y.(type) {
 			case Int:
-				if y.Sign() == 0 {
+				if y == 0 {
 					return nil, fmt.Errorf("floored division by zero")
 				}
-				return x.Div(y), nil
+				return x / y, nil
 			case Float:
-				xf, err := x.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				xf := Float(x)
 				if y == 0.0 {
 					return nil, fmt.Errorf("floored division by zero")
 				}
@@ -960,10 +926,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 				}
 				return floor(x / y), nil
 			case Int:
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				if yf == 0.0 {
 					return nil, fmt.Errorf("floored division by zero")
 				}
@@ -976,15 +939,12 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		case Int:
 			switch y := y.(type) {
 			case Int:
-				if y.Sign() == 0 {
+				if y == 0 {
 					return nil, fmt.Errorf("integer modulo by zero")
 				}
-				return x.Mod(y), nil
+				return x % y, nil
 			case Float:
-				xf, err := x.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				xf := Float(x)
 				if y == 0 {
 					return nil, fmt.Errorf("floating-point modulo by zero")
 				}
@@ -998,13 +958,10 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 				}
 				return x.Mod(y), nil
 			case Int:
-				if y.Sign() == 0 {
+				if y == 0 {
 					return nil, fmt.Errorf("floating-point modulo by zero")
 				}
-				yf, err := y.finiteFloat()
-				if err != nil {
-					return nil, err
-				}
+				yf := Float(y)
 				return x.Mod(yf), nil
 			}
 		case String:
@@ -1077,7 +1034,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		switch x := x.(type) {
 		case Int:
 			if y, ok := y.(Int); ok {
-				return x.Or(y), nil
+				return x | y, nil
 			}
 
 		case *Dict: // union
@@ -1097,7 +1054,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		switch x := x.(type) {
 		case Int:
 			if y, ok := y.(Int); ok {
-				return x.And(y), nil
+				return x & y, nil
 			}
 		case *Set: // intersection
 			if y, ok := y.(*Set); ok {
@@ -1111,7 +1068,7 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 		switch x := x.(type) {
 		case Int:
 			if y, ok := y.(Int); ok {
-				return x.Xor(y), nil
+				return x ^ y, nil
 			}
 		case *Set: // symmetric difference
 			if y, ok := y.(*Set); ok {
@@ -1134,9 +1091,9 @@ func Binary(op syntax.Token, x, y Value) (Value, error) {
 				if y >= 512 {
 					return nil, fmt.Errorf("shift count too large: %v", y)
 				}
-				return x.Lsh(uint(y)), nil
+				return x << uint(y), nil
 			}
-			return x.Rsh(uint(y)), nil
+			return x >> uint(y), nil
 		}
 
 	default:

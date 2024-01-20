@@ -175,12 +175,6 @@ func TestAsm(t *testing.T) {
 						float abc
 				`, "invalid float"},
 
-		{"invalid bigint constant", `
-				program:
-					constants:
-						bigint abc
-				`, "invalid bigint"},
-
 		{"invalid string constant", `
 				program:
 					constants:
@@ -207,7 +201,6 @@ func TestAsm(t *testing.T) {
 						string "abc"
 						int 1234
 						float 3.1415
-						bigint 98765432109876543210
 						bytes "xyz"
 
 					function: Top 1 0 0 +varargs

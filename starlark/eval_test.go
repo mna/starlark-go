@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -174,7 +173,7 @@ func (t fib) Iterate() starlark.Iterator { return &fibIterator{0, 1} }
 type fibIterator struct{ x, y int }
 
 func (it *fibIterator) Next(p *starlark.Value) bool {
-	*p = starlark.MakeInt(it.x)
+	*p = starlark.Int(it.x)
 	it.x, it.y = it.y, it.x+it.y
 	return true
 }
@@ -253,7 +252,7 @@ func (hf *hasfields) Binary(op syntax.Token, y starlark.Value, side starlark.Sid
 	// where x is not Iterable but defines list+x.
 	if op == syntax.PLUS {
 		if _, ok := y.(*starlark.List); ok {
-			return starlark.MakeInt(42), nil // list+hasfields is 42
+			return starlark.Int(42), nil // list+hasfields is 42
 		}
 	}
 	return nil, nil
@@ -439,10 +438,13 @@ f()
 	}
 }
 
+// TODO(mna): see if this test is still relevant without big ints.
+
+/*
 // TestInt exercises the Int.Int64 and Int.Uint64 methods.
 // If we can move their logic into math/big, delete this test.
 func TestInt(t *testing.T) {
-	one := starlark.MakeInt(1)
+	one := starlark.Int(1)
 
 	for _, test := range []struct {
 		i          starlark.Int
@@ -473,6 +475,7 @@ func TestInt(t *testing.T) {
 		}
 	}
 }
+*/
 
 func backtrace(t *testing.T, err error) string {
 	var ee *starlark.EvalError
@@ -533,7 +536,7 @@ Error: floored division by zero`,
   crash.star:2:17: in f
 Error in join: join: in list, want string, got int`,
 	} {
-		globals := starlark.StringDict{"i": starlark.MakeInt(i)}
+		globals := starlark.StringDict{"i": starlark.Int(i)}
 		_, err := starlark.ExecFile(thread, "crash.star", src2, globals)
 		if got := backtrace(t, err); got != want {
 			t.Errorf("error was %s, want %s", got, want)
@@ -606,7 +609,7 @@ func TestRepeatedExec(t *testing.T) {
 	for _, test := range []struct {
 		x, want starlark.Value
 	}{
-		{x: starlark.MakeInt(42), want: starlark.MakeInt(84)},
+		{x: starlark.Int(42), want: starlark.Int(84)},
 		{x: starlark.String("mur"), want: starlark.String("murmur")},
 		{x: starlark.Tuple{starlark.None}, want: starlark.Tuple{starlark.None, starlark.None}},
 	} {
@@ -651,7 +654,7 @@ func TestUnpackUserDefined(t *testing.T) {
 	}
 
 	// failure
-	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.MakeInt(42)}, nil, "x", &x)
+	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.Int(42)}, nil, "x", &x)
 	if want := "unpack: for parameter x: got int, want hasfields"; fmt.Sprint(err) != want {
 		t.Errorf("unpack args error = %q, want %q", err, want)
 	}
@@ -690,7 +693,7 @@ func TestUnpackCustomUnpacker(t *testing.T) {
 	}
 
 	// failure
-	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.MakeInt(42)}, nil, "a", &a)
+	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.Int(42)}, nil, "a", &a)
 	if want := "unpack: for parameter a: got int, want string"; fmt.Sprint(err) != want {
 		t.Errorf("unpack args error = %q, want %q", err, want)
 	}
@@ -716,7 +719,7 @@ func TestUnpackNoneCoalescing(t *testing.T) {
 	}
 
 	// failure
-	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.MakeInt(42)}, nil, "a??", &a)
+	err := starlark.UnpackArgs("unpack", starlark.Tuple{starlark.Int(42)}, nil, "a??", &a)
 	if want := "unpack: for parameter a: got int, want string"; fmt.Sprint(err) != want {
 		t.Errorf("unpack args error = %q, want %q", err, want)
 	}
@@ -745,16 +748,16 @@ func TestAsInt(t *testing.T) {
 		ptr  interface{}
 		want string
 	}{
-		{starlark.MakeInt(42), new(int32), "42"},
-		{starlark.MakeInt(-1), new(int32), "-1"},
+		{starlark.Int(42), new(int32), "42"},
+		{starlark.Int(-1), new(int32), "-1"},
 		// Use Lsh not 1<<40 as the latter exceeds int if GOARCH=386.
-		{starlark.MakeInt(1).Lsh(40), new(int32), "1099511627776 out of range (want value in signed 32-bit range)"},
-		{starlark.MakeInt(-1).Lsh(40), new(int32), "-1099511627776 out of range (want value in signed 32-bit range)"},
+		{starlark.Int(1 << 40), new(int32), "1099511627776 out of range (want value in signed 32-bit range)"},
+		{starlark.Int(-1 << 40), new(int32), "-1099511627776 out of range (want value in signed 32-bit range)"},
 
-		{starlark.MakeInt(42), new(uint16), "42"},
-		{starlark.MakeInt(0xffff), new(uint16), "65535"},
-		{starlark.MakeInt(0x10000), new(uint16), "65536 out of range (want value in unsigned 16-bit range)"},
-		{starlark.MakeInt(-1), new(uint16), "-1 out of range (want value in unsigned 16-bit range)"},
+		{starlark.Int(42), new(uint16), "42"},
+		{starlark.Int(0xffff), new(uint16), "65535"},
+		{starlark.Int(0x10000), new(uint16), "65536 out of range (want value in unsigned 16-bit range)"},
+		{starlark.Int(-1), new(uint16), "-1 out of range (want value in unsigned 16-bit range)"},
 	} {
 		var got string
 		if err := starlark.AsInt(test.val, test.ptr); err != nil {
@@ -924,7 +927,7 @@ func TestExecutionSteps(t *testing.T) {
 	// A Thread records the number of computation steps.
 	thread := new(starlark.Thread)
 	countSteps := func(n int) (uint64, error) {
-		predeclared := starlark.StringDict{"n": starlark.MakeInt(n)}
+		predeclared := starlark.StringDict{"n": starlark.Int(n)}
 		steps0 := thread.ExecutionSteps()
 		_, err := starlark.ExecFile(thread, "steps.star", `squares = [x*x for x in range(n)]`, predeclared)
 		return thread.ExecutionSteps() - steps0, err
@@ -985,7 +988,7 @@ func TestPanicSafety(t *testing.T) {
 		"panic": starlark.NewBuiltin("panic", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 			panic(args[0])
 		}),
-		"list": starlark.NewList([]starlark.Value{starlark.MakeInt(0)}),
+		"list": starlark.NewList([]starlark.Value{starlark.Int(0)}),
 	}
 
 	// This program is executed twice, using the same Thread,

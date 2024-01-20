@@ -36,11 +36,7 @@ func scan(src interface{}) (tokens string, err error) {
 		case IDENT:
 			buf.WriteString(val.raw)
 		case INT:
-			if val.bigInt != nil {
-				fmt.Fprintf(&buf, "%d", val.bigInt)
-			} else {
-				fmt.Fprintf(&buf, "%d", val.int)
-			}
+			fmt.Fprintf(&buf, "%d", val.int)
 		case FLOAT:
 			fmt.Fprintf(&buf, "%e", val.float)
 		case STRING, BYTES:
@@ -157,8 +153,8 @@ pass`, "pass newline pass EOF"}, // consecutive newlines are consolidated
 		{"1e-1", `1.000000e-01 EOF`},
 		{"123", `123 EOF`},
 		{"123e45", `1.230000e+47 EOF`},
-		{"999999999999999999999999999999999999999999999999999", `999999999999999999999999999999999999999999999999999 EOF`},
-		{"12345678901234567890", `12345678901234567890 EOF`},
+		{"999999999999999999999999999999999999999999999999999", `foo.star:1:1: invalid int literal`},
+		{"12345678901234567890", `foo.star:1:1: invalid int literal`},
 		// hex
 		{"0xA", `10 EOF`},
 		{"0xAAG", `170 G EOF`},
@@ -167,7 +163,7 @@ pass`, "pass newline pass EOF"}, // consecutive newlines are consolidated
 		{"0XG", `foo.star:1:1: invalid hex literal`},
 		{"0xA.", `10 . EOF`},
 		{"0xA.e1", `10 . e1 EOF`},
-		{"0x12345678deadbeef12345678", `5634002672576678570168178296 EOF`},
+		{"0x12345678deadbeef12345678", `foo.star:1:1: invalid int literal`},
 		// binary
 		{"0b1010", `10 EOF`},
 		{"0B111101", `61 EOF`},

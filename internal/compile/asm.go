@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,7 +32,6 @@ import (
 // 			string "abc"
 // 			int    1234
 // 			float  1.34
-// 			bigint 9999999999999999999999999
 // 			bytes  "xyz"
 //
 // 	function: NAME <stack> <params> <kwparams> +varargs +kwargs
@@ -346,14 +344,6 @@ func (a *asm) constants(fields []string) []string {
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, f)
-		case "bigint":
-			bi := big.NewInt(0)
-			bi, ok := bi.SetString(fields[1], 10)
-			if !ok {
-				a.err = fmt.Errorf("invalid bigint: %s", fields[1])
-				return fields
-			}
-			a.p.Constants = append(a.p.Constants, bi)
 		case "string":
 			qs, err := strconv.QuotedPrefix(strVal[1])
 			if err != nil {
@@ -687,8 +677,6 @@ func (d *dasm) program() {
 				d.writef("\t\tint\t%d\t# %03d\n", c, i)
 			case float64:
 				d.writef("\t\tfloat\t%g\t# %03d\n", c, i)
-			case *big.Int:
-				d.writef("\t\tbigint\t%d\t# %03d\n", c, i)
 			default:
 				d.err = fmt.Errorf("unsupported constant type: %T", c)
 				return
