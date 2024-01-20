@@ -70,7 +70,6 @@ package starlark
 import (
 	"fmt"
 	"math"
-	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
@@ -490,8 +489,6 @@ func floatCmp(x, y Float) int {
 	}
 	return 0 // both NaN
 }
-
-func (f Float) rational() *big.Rat { return new(big.Rat).SetFloat64(float64(f)) }
 
 // AsFloat returns the float64 value closest to x.
 // The f result is undefined if x is not a float or Int.

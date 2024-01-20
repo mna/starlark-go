@@ -120,7 +120,7 @@ assert.eq(list(range(10)[::-2]), [9, 7, 5, 3, 1])
 assert.eq(list(range(0, 10, 2)[::2]), [0, 4, 8])
 assert.eq(list(range(0, 10, 2)[::-2]), [8, 4, 0])
 # range() is limited by the width of the Go int type (int32 or int64).
-assert.fails(lambda: range(1<<64), "... out of range .want value in signed ..-bit range")
+#assert.fails(lambda: range(1<<64), "... out of range .want value in signed ..-bit range")
 assert.eq(len(range(0x7fffffff)), 0x7fffffff) # O(1)
 # Two ranges compare equal if they denote the same sequence:
 assert.eq(range(0), range(2, 1, 3))       # []

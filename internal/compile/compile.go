@@ -344,7 +344,7 @@ func (op Opcode) String() string {
 type Program struct {
 	Loads     []Binding     // name (really, string) and position of each load stmt
 	Names     []string      // names of attributes and predeclared variables
-	Constants []interface{} // = string | int64 | float64 | *big.Int | Bytes
+	Constants []interface{} // = string | int64 | float64 | Bytes
 	Functions []*Funcode
 	Globals   []Binding // for error messages and tracing
 	Toplevel  *Funcode  // module initialization function
@@ -1354,7 +1354,7 @@ func (fcomp *fcomp) expr(e syntax.Expr) {
 		fcomp.lookup(e)
 
 	case *syntax.Literal:
-		// e.Value is int64, float64, *bigInt, string
+		// e.Value is int64, float64, string
 		v := e.Value
 		if e.Token == syntax.BYTES {
 			v = Bytes(v.(string))
@@ -1601,7 +1601,7 @@ func (fcomp *fcomp) plus(e *syntax.BinaryExpr) {
 func addable(e syntax.Expr) rune {
 	switch e := e.(type) {
 	case *syntax.Literal:
-		// TODO(adonovan): opt: support INT/FLOAT/BIGINT constant folding.
+		// TODO(adonovan): opt: support INT/FLOAT constant folding.
 		switch e.Token {
 		case syntax.STRING:
 			return 's'

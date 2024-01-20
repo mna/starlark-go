@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -421,7 +420,6 @@ func (sc *scanner) readRune() rune {
 type tokenValue struct {
 	raw    string   // raw text of token
 	int    int64    // decoded int
-	bigInt *big.Int // decoded integers > int64
 	float  float64  // decoded float
 	string string   // decoded string or bytes
 	pos    Position // start position of token
@@ -1038,23 +1036,17 @@ func (sc *scanner) scanNumber(val *tokenValue, c rune) Token {
 	}
 	var err error
 	s := val.raw
-	val.bigInt = nil
 	if len(s) > 2 && s[0] == '0' && (s[1] == 'o' || s[1] == 'O') {
 		val.int, err = strconv.ParseInt(s[2:], 8, 64)
 	} else if len(s) > 2 && s[0] == '0' && (s[1] == 'b' || s[1] == 'B') {
 		val.int, err = strconv.ParseInt(s[2:], 2, 64)
 	} else {
 		val.int, err = strconv.ParseInt(s, 0, 64)
-		if err != nil {
-			num := new(big.Int)
-			var ok bool
-			val.bigInt, ok = num.SetString(s, 0)
-			if ok {
-				err = nil
-			}
-		}
 	}
 	if err != nil {
+		// TODO(mna): assert.eq(minint64, -9223372036854775808) fails because it is
+		// parsed as unary minus followed by positive 922..808, which is too big
+		// for int64. Find a solution so minint64 can be used?
 		sc.error(start, "invalid int literal")
 	}
 	return INT

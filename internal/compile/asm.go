@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -678,8 +677,6 @@ func (d *dasm) program() {
 				d.writef("\t\tint\t%d\t# %03d\n", c, i)
 			case float64:
 				d.writef("\t\tfloat\t%g\t# %03d\n", c, i)
-			case *big.Int:
-				d.writef("\t\tbigint\t%d\t# %03d\n", c, i)
 			default:
 				d.err = fmt.Errorf("unsupported constant type: %T", c)
 				return

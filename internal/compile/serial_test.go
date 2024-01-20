@@ -13,7 +13,7 @@ import (
 func TestSerialization(t *testing.T) {
 	predeclared := starlark.StringDict{
 		"x": starlark.String("mur"),
-		"n": starlark.MakeInt(2),
+		"n": starlark.Int(2),
 	}
 	const src = `
 def mul(a, b):

@@ -61,7 +61,7 @@ func makeTestInts() {
 	for i := range &testInts {
 		r := int(zipf.Uint64())
 		testInts[i].goInt = r
-		testInts[i].Int = MakeInt(r)
+		testInts[i].Int = Int(r)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestHashtableCount(t *testing.T) {
 	const count = 1000
 	ht := new(hashtable)
 	for i := 0; i < count; i++ {
-		ht.insert(MakeInt(i), None)
+		ht.insert(Int(i), None)
 	}
 
 	if c, err := ht.count(rangeValue{0, count, 1, count}.Iterate()); err != nil {
