@@ -57,9 +57,13 @@ func TestExecAsm(t *testing.T) {
 					require.NotNil(t, g, "global %s does not exist", global)
 					if want == "None" {
 						require.Equal(t, None, g, "global %s", global)
+					} else if qs, err := strconv.Unquote(want); err == nil {
+						got, ok := AsString(g)
+						require.True(t, ok, "global %s", global)
+						require.Equal(t, qs, got, "global %s", global)
 					} else if n, err := strconv.ParseInt(want, 10, 64); err == nil {
 						got, err := AsInt32(g)
-						require.NoError(t, err)
+						require.NoError(t, err, "global %s", global)
 						require.Equal(t, n, int64(got), "global %s", global)
 					} else {
 						require.Failf(t, "unexpected result", "global %s: want %s, got %v (%[2]T)", global, want, g)
