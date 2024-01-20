@@ -7,7 +7,6 @@ package starlark
 import (
 	"fmt"
 	"math"
-	"math/big"
 	"reflect"
 	"strconv"
 
@@ -40,15 +39,9 @@ func (i Int) Type() string { return "int" }
 func (i Int) Freeze()      {}                // immutable
 func (i Int) Truth() Bool  { return i != 0 } // true if non-zero
 func (i Int) Hash() (uint32, error) {
-	// TODO(mna): needs some consideration
-	iSmall, iBig := i.get()
-	var lo big.Word
-	if iBig != nil {
-		lo = iBig.Bits()[0]
-	} else {
-		lo = big.Word(iSmall)
-	}
-	return 12582917 * uint32(lo+3), nil
+	// TODO(mna): needs some consideration, would that even be needed if using
+	// Golang's native map?
+	return 12582917 * uint32(i+3), nil
 }
 
 // Cmp implements comparison of two Int values.
@@ -64,19 +57,18 @@ func AsInt32(x Value) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("got %s, want int", x.Type())
 	}
-	iSmall, iBig := i.get()
-	if iBig != nil {
+	if i < math.MinInt32 || i > math.MaxInt32 {
 		return 0, fmt.Errorf("%s out of range", i)
 	}
-	return int(iSmall), nil
+	return int(i), nil
 }
 
 // AsInt sets *ptr to the value of Starlark int x, if it is exactly representable,
 // otherwise it returns an error.
 // The type of ptr must be one of the pointer types *int, *int8, *int16, *int32, or *int64,
 // or one of their unsigned counterparts including *uintptr.
-func AsInt(x Value, ptr interface{}) error {
-	xint, ok := x.(Int)
+func AsInt(x Value, ptr any) error {
+	i, ok := x.(Int)
 	if !ok {
 		return fmt.Errorf("got %s, want int", x.Type())
 	}
@@ -84,9 +76,8 @@ func AsInt(x Value, ptr interface{}) error {
 	bits := reflect.TypeOf(ptr).Elem().Size() * 8
 	switch ptr.(type) {
 	case *int, *int8, *int16, *int32, *int64:
-		i, ok := xint.Int64()
-		if !ok || bits < 64 && !(-1<<(bits-1) <= i && i < 1<<(bits-1)) {
-			return fmt.Errorf("%s out of range (want value in signed %d-bit range)", xint, bits)
+		if bits < 64 && !(-1<<(bits-1) <= i && i < 1<<(bits-1)) {
+			return fmt.Errorf("%s out of range (want value in signed %d-bit range)", i, bits)
 		}
 		switch ptr := ptr.(type) {
 		case *int:
@@ -98,13 +89,12 @@ func AsInt(x Value, ptr interface{}) error {
 		case *int32:
 			*ptr = int32(i)
 		case *int64:
-			*ptr = i
+			*ptr = int64(i)
 		}
 
 	case *uint, *uint8, *uint16, *uint32, *uint64, *uintptr:
-		i, ok := xint.Uint64()
-		if !ok || bits < 64 && i >= 1<<bits {
-			return fmt.Errorf("%s out of range (want value in unsigned %d-bit range)", xint, bits)
+		if i < 0 || bits < 64 && i >= 1<<bits {
+			return fmt.Errorf("%s out of range (want value in unsigned %d-bit range)", i, bits)
 		}
 		switch ptr := ptr.(type) {
 		case *uint:
@@ -116,7 +106,7 @@ func AsInt(x Value, ptr interface{}) error {
 		case *uint32:
 			*ptr = uint32(i)
 		case *uint64:
-			*ptr = i
+			*ptr = uint64(i)
 		case *uintptr:
 			*ptr = uintptr(i)
 		}
@@ -136,28 +126,17 @@ func NumberToInt(x Value) (Int, error) {
 	case Float:
 		f := float64(x)
 		if math.IsInf(f, 0) {
-			return zero, fmt.Errorf("cannot convert float infinity to integer")
+			return 0, fmt.Errorf("cannot convert float infinity to integer")
 		} else if math.IsNaN(f) {
-			return zero, fmt.Errorf("cannot convert float NaN to integer")
+			return 0, fmt.Errorf("cannot convert float NaN to integer")
 		}
 		return finiteFloatToInt(x), nil
 
 	}
-	return zero, fmt.Errorf("cannot convert %s to int", x.Type())
+	return 0, fmt.Errorf("cannot convert %s to int", x.Type())
 }
 
 // finiteFloatToInt converts f to an Int, truncating towards zero.
-// f must be finite.
 func finiteFloatToInt(f Float) Int {
-	// We avoid '<= MaxInt64' so that both constants are exactly representable as floats.
-	// See https://github.com/google/starlark-go/issues/375.
-	if math.MinInt64 <= f && f < math.MaxInt64+1 {
-		// small values
-		return MakeInt64(int64(f))
-	}
-	rat := f.rational()
-	if rat == nil {
-		panic(f) // non-finite
-	}
-	return MakeBigInt(new(big.Int).Div(rat.Num(), rat.Denom()))
+	return Int(f)
 }

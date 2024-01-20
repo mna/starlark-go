@@ -33,7 +33,6 @@ import (
 // 			string "abc"
 // 			int    1234
 // 			float  1.34
-// 			bigint 9999999999999999999999999
 // 			bytes  "xyz"
 //
 // 	function: NAME <stack> <params> <kwparams> +varargs +kwargs
@@ -346,14 +345,6 @@ func (a *asm) constants(fields []string) []string {
 				return fields
 			}
 			a.p.Constants = append(a.p.Constants, f)
-		case "bigint":
-			bi := big.NewInt(0)
-			bi, ok := bi.SetString(fields[1], 10)
-			if !ok {
-				a.err = fmt.Errorf("invalid bigint: %s", fields[1])
-				return fields
-			}
-			a.p.Constants = append(a.p.Constants, bi)
 		case "string":
 			qs, err := strconv.QuotedPrefix(strVal[1])
 			if err != nil {

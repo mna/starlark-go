@@ -158,7 +158,7 @@ type TotallyOrdered interface {
 }
 
 var (
-	_ TotallyOrdered = Int{}
+	_ TotallyOrdered = Int(0)
 	_ TotallyOrdered = Float(0)
 	_ Comparable     = False
 	_ Comparable     = String("")
@@ -501,7 +501,7 @@ func AsFloat(x Value) (f float64, ok bool) {
 	case Float:
 		return float64(x), true
 	case Int:
-		return float64(x.Float()), true
+		return float64(x), true
 	}
 	return 0, false
 }
@@ -605,7 +605,7 @@ func (si stringElems) Iterate() Iterator     { return &stringElemsIterator{si, 0
 func (si stringElems) Len() int              { return len(si.s) }
 func (si stringElems) Index(i int) Value {
 	if si.ords {
-		return MakeInt(int(si.s[i]))
+		return Int(int(si.s[i]))
 	}
 	// TODO(adonovan): opt: preallocate canonical 1-byte strings
 	// to avoid interface allocation.
@@ -668,7 +668,7 @@ func (it *stringCodepointsIterator) Next(p *Value) bool {
 			*p = s[:sz]
 		}
 	} else {
-		*p = MakeInt(int(r))
+		*p = Int(int(r))
 	}
 	it.i += sz
 	return true
@@ -1464,7 +1464,14 @@ func CompareDepth(op syntax.Token, x, y Value, depth int) (bool, error) {
 			if y != y {
 				cmp = -1 // y is NaN
 			} else if !math.IsInf(float64(y), 0) {
-				cmp = x.rational().Cmp(y.rational()) // y is finite
+				// TODO(mna): a bit naive for now
+				if xf := float64(x); xf == float64(y) {
+					cmp = 0
+				} else if xf < float64(y) {
+					cmp = -1
+				} else {
+					cmp = +1
+				}
 			} else if y > 0 {
 				cmp = -1 // y is +Inf
 			} else {
@@ -1478,7 +1485,14 @@ func CompareDepth(op syntax.Token, x, y Value, depth int) (bool, error) {
 			if x != x {
 				cmp = +1 // x is NaN
 			} else if !math.IsInf(float64(x), 0) {
-				cmp = x.rational().Cmp(y.rational()) // x is finite
+				// TODO(mna): a bit naive for now
+				if yf := float64(y); float64(x) == yf {
+					cmp = 0
+				} else if yf < float64(x) {
+					cmp = +1
+				} else {
+					cmp = -1
+				}
 			} else if x > 0 {
 				cmp = +1 // x is +Inf
 			} else {

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"os"
 	"sort"
 	"strconv"
@@ -183,10 +182,10 @@ func builtinAbs(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, 
 	case Float:
 		return Float(math.Abs(float64(x))), nil
 	case Int:
-		if x.Sign() >= 0 {
+		if x >= 0 {
 			return x, nil
 		}
-		return zero.Sub(x), nil
+		return -x, nil
 	default:
 		return nil, fmt.Errorf("got %s, want int or float", x.Type())
 	}
@@ -349,14 +348,14 @@ func builtinEnumerate(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (V
 		for i := 0; iter.Next(&x); i++ {
 			pair := array[:2:2]
 			array = array[2:]
-			pair[0] = MakeInt(start + i)
+			pair[0] = Int(start + i)
 			pair[1] = x
 			pairs = append(pairs, pair)
 		}
 	} else {
 		// non-sequence (unknown length)
 		for i := 0; iter.Next(&x); i++ {
-			pair := Tuple{MakeInt(start + i), x}
+			pair := Tuple{Int(start + i), x}
 			pairs = append(pairs, pair)
 		}
 	}
@@ -403,7 +402,7 @@ func builtinFloat(thread *Thread, b *Builtin, args Tuple, kwargs []Tuple) (Value
 		}
 		return Float(0.0), nil
 	case Int:
-		return x.finiteFloat()
+		return Float(x), nil
 	case Float:
 		return x, nil
 	case String:
@@ -525,7 +524,7 @@ func builtinHash(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value,
 	default:
 		return nil, fmt.Errorf("hash: got %s, want string or bytes", x.Type())
 	}
-	return MakeInt64(h), nil
+	return Int(h), nil
 }
 
 // javaStringHash returns the same hash as would be produced by
@@ -547,7 +546,7 @@ func javaStringHash(s string) (h int32) {
 
 // https://github.com/google/starlark-go/blob/master/doc/spec.md#int
 func builtinInt(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, error) {
-	var x Value = zero
+	var x Value = Int(0)
 	var base Value
 	if err := UnpackArgs("int", args, kwargs, "x", &x, "base?", &base); err != nil {
 		return nil, err
@@ -578,9 +577,9 @@ func builtinInt(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, 
 
 	if b, ok := x.(Bool); ok {
 		if b {
-			return one, nil
+			return Int(1), nil
 		}
-		return zero, nil
+		return Int(0), nil
 	}
 
 	i, err := NumberToInt(x)
@@ -592,72 +591,11 @@ func builtinInt(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, 
 
 // parseInt defines the behavior of int(string, base=int). It returns nil on error.
 func parseInt(s string, base int) Value {
-	// remove sign
-	var neg bool
-	if s != "" {
-		if s[0] == '+' {
-			s = s[1:]
-		} else if s[0] == '-' {
-			neg = true
-			s = s[1:]
-		}
-	}
-
-	// remove optional base prefix
-	baseprefix := 0
-	if len(s) > 1 && s[0] == '0' {
-		if len(s) > 2 {
-			switch s[1] {
-			case 'o', 'O':
-				baseprefix = 8
-			case 'x', 'X':
-				baseprefix = 16
-			case 'b', 'B':
-				baseprefix = 2
-			}
-		}
-		if baseprefix != 0 {
-			// Remove the base prefix if it matches
-			// the explicit base, or if base=0.
-			if base == 0 || baseprefix == base {
-				base = baseprefix
-				s = s[2:]
-			}
-		} else {
-			// For automatic base detection,
-			// a string starting with zero
-			// must be all zeros.
-			// Thus we reject int("0755", 0).
-			if base == 0 {
-				for i := 1; i < len(s); i++ {
-					if s[i] != '0' {
-						return nil
-					}
-				}
-				return zero
-			}
-		}
-	}
-	if base == 0 {
-		base = 10
-	}
-
-	// we explicitly handled sign above.
-	// if a sign remains, it is invalid.
-	if s != "" && (s[0] == '-' || s[0] == '+') {
+	i, err := strconv.ParseInt(s, base, 64)
+	if err != nil {
 		return nil
 	}
-
-	// s has no sign or base prefix.
-	if i, ok := new(big.Int).SetString(s, base); ok {
-		res := MakeBigInt(i)
-		if neg {
-			res = zero.Sub(res)
-		}
-		return res
-	}
-
-	return nil
+	return Int(i)
 }
 
 // https://github.com/google/starlark-go/blob/master/doc/spec.md#len
@@ -670,7 +608,7 @@ func builtinLen(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, 
 	if lenx < 0 {
 		return nil, fmt.Errorf("len: value of type %s has no len", x.Type())
 	}
-	return MakeInt(lenx), nil
+	return Int(lenx), nil
 }
 
 // https://github.com/google/starlark-go/blob/master/doc/spec.md#builtinList
@@ -779,14 +717,14 @@ func builtinOrd(thread *Thread, _ *Builtin, args Tuple, kwargs []Tuple) (Value, 
 			n := utf8.RuneCountInString(s)
 			return nil, fmt.Errorf("ord: string encodes %d Unicode code points, want 1", n)
 		}
-		return MakeInt(int(r)), nil
+		return Int(int(r)), nil
 
 	case Bytes:
 		// ord(bytes) returns int value of sole byte.
 		if len(x) != 1 {
 			return nil, fmt.Errorf("ord: bytes has length %d, want 1", len(x))
 		}
-		return MakeInt(int(x[0])), nil
+		return Int(int(x[0])), nil
 	default:
 		return nil, fmt.Errorf("ord: got %s, want string or bytes", x.Type())
 	}
@@ -854,7 +792,7 @@ var (
 )
 
 func (r rangeValue) Len() int          { return r.len }
-func (r rangeValue) Index(i int) Value { return MakeInt(r.start + i*r.step) }
+func (r rangeValue) Index(i int) Value { return Int(r.start + i*r.step) }
 func (r rangeValue) Iterate() Iterator { return &rangeIterator{r, 0} }
 
 // rangeLen calculates the length of a range with the provided start, stop, and step.
@@ -1372,7 +1310,7 @@ func list_index(_ *Thread, b *Builtin, args Tuple, kwargs []Tuple) (Value, error
 		if eq, err := Equal(recv.elems[i], value); err != nil {
 			return nil, nameErr(b, err)
 		} else if eq {
-			return MakeInt(i), nil
+			return Int(i), nil
 		}
 	}
 	return nil, nameErr(b, "value not in list")
@@ -1518,7 +1456,7 @@ func (it *bytesIterator) Next(p *Value) bool {
 	if it.bytes == "" {
 		return false
 	}
-	*p = MakeInt(int(it.bytes[0]))
+	*p = Int(int(it.bytes[0]))
 	it.bytes = it.bytes[1:]
 	return true
 }
@@ -1543,7 +1481,7 @@ func string_count(_ *Thread, b *Builtin, args Tuple, kwargs []Tuple) (Value, err
 	if start < end {
 		slice = recv[start:end]
 	}
-	return MakeInt(strings.Count(slice, sub)), nil
+	return Int(strings.Count(slice, sub)), nil
 }
 
 // https://github.com/google/starlark-go/blob/master/doc/spec.md#string·isalnum
@@ -2371,9 +2309,9 @@ func string_find_impl(b *Builtin, args Tuple, kwargs []Tuple, allowError, last b
 		if !allowError {
 			return nil, nameErr(b, "substring not found")
 		}
-		return MakeInt(-1), nil
+		return Int(-1), nil
 	}
-	return MakeInt(i + start), nil
+	return Int(i + start), nil
 }
 
 // Common implementation of builtin dict function and dict.update method.

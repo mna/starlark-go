@@ -61,7 +61,6 @@ package compile
 //      data            ...             # 1=bytes   string
 //                                      # 2=int     varint
 //                                      # 3=float   varint (bits as uint64)
-//                                      # 4=bigint  string (decimal ASCII text)
 //
 // The encoding starts with a four-byte magic number.
 // The next four bytes are a little-endian uint32
@@ -90,7 +89,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/big"
 	debugpkg "runtime/debug"
 	"unsafe"
 
@@ -126,9 +124,6 @@ func (prog *Program) Encode() []byte {
 		case float64:
 			e.int(3)
 			e.uint64(math.Float64bits(c))
-		case *big.Int:
-			e.int(4)
-			e.string(c.Text(10))
 		}
 	}
 	e.bindings(prog.Globals)
@@ -284,8 +279,6 @@ func DecodeProgram(data []byte) (_ *Program, err error) {
 			c = d.int64()
 		case 3:
 			c = math.Float64frombits(d.uint64())
-		case 4:
-			c, _ = new(big.Int).SetString(d.string(), 10)
 		}
 		constants[i] = c
 	}

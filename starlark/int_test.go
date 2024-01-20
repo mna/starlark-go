@@ -1,22 +1,13 @@
 // Copyright 2017 The Bazel Authors. All rights reserved.
+
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package starlark
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"math"
-	"math/big"
-	"os"
-	"os/exec"
-	"runtime"
-	"strings"
-	"testing"
-)
+// TODO: TBD if still relevant, arithmetic is using built-in Go operations now.
 
+/*
 // TestIntOpts exercises integer arithmetic, especially at the boundaries.
 func TestIntOpts(t *testing.T) {
 	f := MakeInt64
@@ -77,81 +68,4 @@ func TestIntOpts(t *testing.T) {
 		}
 	}
 }
-
-func TestImmutabilityMakeBigInt(t *testing.T) {
-	// use max int64 for the test
-	expect := int64(^uint64(0) >> 1)
-
-	mutint := big.NewInt(expect)
-	value := MakeBigInt(mutint)
-	mutint.Set(big.NewInt(1))
-
-	got, _ := value.Int64()
-	if got != expect {
-		t.Errorf("expected %d, got %d", expect, got)
-	}
-}
-
-func TestImmutabilityBigInt(t *testing.T) {
-	// use 1 and max int64 for the test
-	for _, expect := range []int64{1, int64(^uint64(0) >> 1)} {
-		value := MakeBigInt(big.NewInt(expect))
-
-		bigint := value.BigInt()
-		bigint.Set(big.NewInt(2))
-
-		got, _ := value.Int64()
-		if got != expect {
-			t.Errorf("expected %d, got %d", expect, got)
-		}
-	}
-}
-
-// TestIntFallback creates a small Int value in a child process with
-// limited address space to ensure that it still works, but prints a warning.
-func TestIntFallback(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("test disabled on this platform (requires ulimit -v)")
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatalf("can't find file name of executable: %v", err)
-	}
-	// ulimit -v limits the address space in KB. Not portable.
-	// 4GB is enough for the Go runtime but not for the optimization.
-	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("ulimit -v 4000000 && %q --entry=intfallback", exe)) //nolint:gosec
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("intfallback subcommand failed: %v\n%s", err, out)
-	}
-
-	// Check the warning was printed.
-	if !strings.Contains(string(out), "Integer performance may suffer") {
-		t.Errorf("expected warning was not printed. Output=<<%s>>", out)
-	}
-}
-
-// intfallback is called in a child process with limited address space.
-func intfallback() {
-	const want = 123
-	if got, _ := MakeBigInt(big.NewInt(want)).Int64(); got != want {
-		log.Fatalf("intfallback: got %d, want %d", got, want)
-	}
-}
-
-// The --entry flag invokes an alternate entry point, for use in subprocess tests.
-var testEntry = flag.String("entry", "", "child process entry-point")
-
-func TestMain(m *testing.M) {
-	// In some build systems, notably Blaze, flag.Parse is called before TestMain,
-	// in violation of the TestMain contract, making this second call a no-op.
-	flag.Parse()
-	switch *testEntry {
-	case "":
-		os.Exit(m.Run()) // normal case
-	case "intfallback":
-		intfallback()
-	default:
-		log.Fatalf("unknown entry point: %s", *testEntry)
-	}
-}
+*/
