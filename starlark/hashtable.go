@@ -7,7 +7,6 @@ package starlark
 import (
 	"fmt"
 	"math/big"
-	_ "unsafe" // for go:linkname hack
 )
 
 // hashtable is used to represent Starlark dict and set values.
@@ -16,12 +15,8 @@ import (
 //
 // Initialized instances of hashtable must not be copied.
 type hashtable struct {
-	table     []bucket  // len is zero or a power of two
-	bucket0   [1]bucket // inline allocation for small maps.
-	len       uint32
-	itercount uint32  // number of active iterators (ignored if frozen)
-	head      *entry  // insertion order doubly-linked list; may be nil
-	tailLink  **entry // address of nil link at end of list (perhaps &head)
+	m         map[Value]Value
+	itercount uint32 // number of active iterators (ignored if frozen)
 	frozen    bool
 
 	_ noCopy // triggers vet copylock check on this type.
@@ -34,42 +29,19 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
-const bucketSize = 8
-
-type bucket struct {
-	entries [bucketSize]entry
-	next    *bucket // linked list of buckets
-}
-
-type entry struct {
-	hash       uint32 // nonzero => in use
-	key, value Value
-	next       *entry  // insertion order doubly-linked list; may be nil
-	prevLink   **entry // address of link to this entry (perhaps &head)
-}
-
 func (ht *hashtable) init(size int) {
 	if size < 0 {
 		panic("size < 0")
 	}
-	nb := 1
-	for overloaded(size, nb) {
-		nb = nb << 1
-	}
-	if nb < 2 {
-		ht.table = ht.bucket0[:1]
-	} else {
-		ht.table = make([]bucket, nb)
-	}
-	ht.tailLink = &ht.head
+	ht.m = make(map[Value]Value, size)
 }
 
 func (ht *hashtable) freeze() {
 	if !ht.frozen {
 		ht.frozen = true
-		for e := ht.head; e != nil; e = e.next {
-			e.key.Freeze()
-			e.value.Freeze()
+		for k, v := range ht.m {
+			k.Freeze()
+			v.Freeze()
 		}
 	}
 }
@@ -78,132 +50,25 @@ func (ht *hashtable) insert(k, v Value) error {
 	if err := ht.checkMutable("insert into"); err != nil {
 		return err
 	}
-	if ht.table == nil {
+	if ht.m == nil {
 		ht.init(1)
 	}
-	h, err := k.Hash()
-	if err != nil {
-		return err
-	}
-	if h == 0 {
-		h = 1 // zero is reserved
-	}
-
-retry:
-	var insert *entry
-
-	// Inspect each bucket in the bucket list.
-	p := &ht.table[h&(uint32(len(ht.table)-1))]
-	for {
-		for i := range p.entries {
-			e := &p.entries[i]
-			if e.hash != h {
-				if e.hash == 0 {
-					// Found empty entry; make a note.
-					insert = e
-				}
-				continue
-			}
-			if eq, err := Equal(k, e.key); err != nil {
-				return err // e.g. excessively recursive tuple
-			} else if !eq {
-				continue
-			}
-			// Key already present; update value.
-			e.value = v
-			return nil
-		}
-		if p.next == nil {
-			break
-		}
-		p = p.next
-	}
-
-	// Key not found.  p points to the last bucket.
-
-	// Does the number of elements exceed the buckets' load factor?
-	if overloaded(int(ht.len), len(ht.table)) {
-		ht.grow()
-		goto retry
-	}
-
-	if insert == nil {
-		// No space in existing buckets.  Add a new one to the bucket list.
-		b := new(bucket)
-		p.next = b
-		insert = &b.entries[0]
-	}
-
-	// Insert key/value pair.
-	insert.hash = h
-	insert.key = k
-	insert.value = v
-
-	// Append entry to doubly-linked list.
-	insert.prevLink = ht.tailLink
-	*ht.tailLink = insert
-	ht.tailLink = &insert.next
-
-	ht.len++
-
+	ht.m[k] = v
 	return nil
 }
 
-func overloaded(elems, buckets int) bool {
-	const loadFactor = 6.5 // just a guess
-	return elems >= bucketSize && float64(elems) >= loadFactor*float64(buckets)
-}
-
-func (ht *hashtable) grow() {
-	// Double the number of buckets and rehash.
-	//
-	// Even though this makes reentrant calls to ht.insert,
-	// calls Equals unnecessarily (since there can't be duplicate keys),
-	// and recomputes the hash unnecessarily, the gains from
-	// avoiding these steps were found to be too small to justify
-	// the extra logic: -2% on hashtable benchmark.
-	ht.table = make([]bucket, len(ht.table)<<1)
-	oldhead := ht.head
-	ht.head = nil
-	ht.tailLink = &ht.head
-	ht.len = 0
-	for e := oldhead; e != nil; e = e.next {
-		ht.insert(e.key, e.value)
-	}
-	ht.bucket0[0] = bucket{} // clear out unused initial bucket
-}
-
 func (ht *hashtable) lookup(k Value) (v Value, found bool, err error) {
-	h, err := k.Hash()
-	if err != nil {
-		return nil, false, err // unhashable
-	}
-	if h == 0 {
-		h = 1 // zero is reserved
-	}
-	if ht.table == nil {
+	if ht.m == nil {
 		return None, false, nil // empty
 	}
-
-	// Inspect each bucket in the bucket list.
-	for p := &ht.table[h&(uint32(len(ht.table)-1))]; p != nil; p = p.next {
-		for i := range p.entries {
-			e := &p.entries[i]
-			if e.hash == h {
-				if eq, err := Equal(k, e.key); err != nil {
-					return nil, false, err // e.g. excessively recursive tuple
-				} else if eq {
-					return e.value, true, nil // found
-				}
-			}
-		}
-	}
-	return None, false, nil // not found
+	// TODO: handle k being not hashable and return error? currently would panic
+	v, ok := ht.m[k]
+	return v, ok, nil
 }
 
 // count returns the number of distinct elements of iter that are elements of ht.
 func (ht *hashtable) count(iter Iterator) (int, error) {
-	if ht.table == nil {
+	if ht.m == nil {
 		return 0, nil // empty
 	}
 
@@ -416,29 +281,4 @@ func (it *keyIterator) Done() {
 	if !it.ht.frozen {
 		it.ht.itercount--
 	}
-}
-
-// TODO(adonovan): use go1.19's maphash.String.
-
-// hashString computes the hash of s.
-func hashString(s string) uint32 {
-	if len(s) >= 12 {
-		// Call the Go runtime's optimized hash implementation,
-		// which uses the AESENC instruction on amd64 machines.
-		return uint32(goStringHash(s, 0))
-	}
-	return softHashString(s)
-}
-
-//go:linkname goStringHash runtime.stringHash
-func goStringHash(s string, seed uintptr) uintptr
-
-// softHashString computes the 32-bit FNV-1a hash of s in software.
-func softHashString(s string) uint32 {
-	var h uint32 = 2166136261
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= 16777619
-	}
-	return h
 }
